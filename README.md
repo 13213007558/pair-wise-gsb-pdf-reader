@@ -97,6 +97,37 @@ reader  = PDF::Reader.new("somefile.pdf")
 puts reader.objects.inspect
 ```
 
+# Interactive Forms
+
+Filled-in AcroForm fields can be read without modifying the PDF or executing
+form JavaScript:
+
+```ruby
+reader = PDF::Reader.new("some-filled-form.pdf")
+form   = reader.acroform
+
+form.fields.each do |field|
+  puts field.name
+  puts field.type
+  puts field.config.inspect
+  puts field.value.inspect
+
+  field.widgets.each do |widget|
+    puts widget.page
+    puts widget.rect.inspect
+    puts widget.state.inspect
+  end
+end
+
+puts form.diagnostics.inspect
+```
+
+`field.value` is a logical value. Strings are UTF-8, checkboxes return a
+boolean, radio groups return the selected export name, and multi-select choice
+fields return an Array. Conflicting field `/V`, widget `/AS`, and `/AP` values
+are retained in `field.conflicts` and `field.value_sources`; malformed field
+trees are reported in `form.diagnostics`.
+
 # Text Encoding
 
 Regardless of the internal encoding used in the PDF all text will be converted

@@ -123,6 +123,7 @@ module PDF
       @objects = PDF::Reader::ObjectHash.new(input, opts) #: PDF::Reader::ObjectHash
       @page_count = nil #: Integer | nil
       @root = nil #: Hash[Symbol, untyped] | nil
+      @acroform = nil #: PDF::Reader::AcroForm | nil
     end
 
     # Return a Hash with some basic information about the PDF file
@@ -147,6 +148,20 @@ module PDF
         xml
       end
     end
+
+    # Return a read-only model of the AcroForm fields and widgets in the PDF.
+    # Returns nil if the PDF has no interactive form dictionary.
+    #
+    #: () -> PDF::Reader::AcroForm?
+    def acroform
+      dict = @objects.deref(root[:AcroForm])
+      return nil if dict.nil?
+      return nil unless dict.is_a?(::Hash)
+
+      @acroform ||= PDF::Reader::AcroForm.new(@objects, dict)
+    end
+
+    alias :form :acroform
 
     # To number of pages in this PDF
     #
@@ -282,6 +297,7 @@ require 'pdf/reader/standard_key_builder'
 require 'pdf/reader/key_builder_v5'
 require 'pdf/reader/aes_v2_security_handler'
 require 'pdf/reader/aes_v3_security_handler'
+require 'pdf/reader/acro_form'
 require 'pdf/reader/rc4'
 require 'pdf/reader/rc4_security_handler'
 require 'pdf/reader/unimplemented_security_handler'
