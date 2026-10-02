@@ -58,11 +58,14 @@ class PDF::Reader
     # Valid options:
     #
     #   :password - the user password to decrypt the source PDF
+    #   :revision - pin the object view to a particular revision of an
+    #               incrementally saved PDF. 0 is the oldest revision,
+    #               -1 (the default) is the most recent.
     #
     #: (untyped, ?Hash[Symbol, untyped]) -> void
     def initialize(input, opts = {})
       @io          = extract_io_from(input) #: untyped
-      @xref        = PDF::Reader::XRef.new(@io) #: PDF::Reader::XRef[PDF::Reader::Reference]
+      @xref        = PDF::Reader::XRef.new(@io, opts[:revision]) #: PDF::Reader::XRef[untyped]
       @pdf_version = read_version #: Float
       @trailer     = @xref.trailer #: Hash[Symbol, untyped]
       @cache       = opts[:cache] || PDF::Reader::ObjectCache.new #: PDF::Reader::ObjectCache
@@ -532,6 +535,22 @@ class PDF::Reader
     #: () -> bool
     def encrypted?
       trailer.has_key?(:Encrypt)
+    end
+
+    # The number of revisions (incremental saves) found in the file. A file
+    # that has never been incrementally updated has 1 revision.
+    #
+    #: () -> Integer
+    def revision_count
+      @xref.revision_count
+    end
+
+    # The revision this object view is pinned to. 0 is the oldest revision,
+    # revision_count - 1 is the most recent.
+    #
+    #: () -> Integer
+    def revision
+      @xref.revision
     end
 
     #: () -> bool

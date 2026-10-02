@@ -53,17 +53,35 @@ class PDF::Reader
     #: Hash[Symbol, untyped]
     attr_reader :trailer
 
+    # The number of revisions (xref sections) found while walking the /Prev
+    # chain from the most recent xref section to the oldest.
+    #
+    #: Integer
+    attr_reader :revision_count
+
+    # The revision this XRef is pinned to. 0 is the oldest revision,
+    # revision_count - 1 is the most recent.
+    #
+    #: Integer
+    attr_reader :revision
+
     ################################################################################
     # create a new Xref table based on the contents of the supplied io object
     #
     # io - must be an IO object, generally either a file or a StringIO
+    # revision - pin this table to a particular revision of the document. 0 is
+    #            the oldest revision, -1 (the default) is the most recent.
     #
-    #: (IO | Tempfile | StringIO) -> void
-    def initialize(io)
+    #: (IO | Tempfile | StringIO, ?Integer?) -> void
+    def initialize(io, revision = nil)
       @io = io
       @junk_offset = calc_junk_offset(io) || 0 #: Integer
-      @xref = {} #: Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference]]
-      @trailer = load_offsets #: Hash[Symbol, untyped]
+      @sections = [] #: Array[Hash[Symbol, untyped]]
+      load_offsets
+      @revision_count = @sections.size #: Integer
+      @revision = normalize_revision(revision) #: Integer
+      @xref = merge_sections(@revision) #: Hash[Integer, Hash[Integer, untyped]]
+      @trailer = @sections.fetch(section_index(@revision))[:trailer] #: Hash[Symbol, untyped]
     end
 
     ################################################################################
@@ -99,6 +117,60 @@ class PDF::Reader
     ################################################################################
     private
     ################################################################################
+    # Convert a user supplied revision number to a 0-based index where 0 is the
+    # oldest revision. Negative values count back from the most recent revision.
+    #
+    #: (Integer?) -> Integer
+    def normalize_revision(revision)
+      return @revision_count - 1 if revision.nil?
+
+      rev = Integer(revision)
+      rev += @revision_count if rev < 0
+      unless rev >= 0 && rev < @revision_count
+        raise ArgumentError,
+          "revision #{revision} is out of range, this file has #{@revision_count} revision(s)"
+      end
+      rev
+    end
+    ################################################################################
+    # Sections are stored newest first, so convert a 0-based oldest-first revision
+    # number into an index into @sections.
+    #
+    #: (Integer) -> Integer
+    def section_index(revision)
+      @revision_count - 1 - revision
+    end
+    ################################################################################
+    # Merge the xref sections that were valid at the requested revision into a
+    # single offset map. Newer sections win over older ones, and free entries in
+    # newer sections mask in-use entries from older sections so deleted objects
+    # stay deleted.
+    #
+    #: (Integer) -> Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference]]
+    def merge_sections(revision)
+      merged = {} #: Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference]]
+      freed  = {} #: Hash[Integer, Integer]
+
+      @sections[section_index(revision)..-1].each do |section|
+        section[:entries].each do |id, gens|
+          gens.each do |gen, value|
+            if value == :free
+              # tombstone: masks in-use entries with lower generations from
+              # older sections, even if a newer section redefines this gen
+              freed[id] = gen if gen > (freed[id] || -1)
+            elsif merged.fetch(id, {}).has_key?(gen)
+              next
+            elsif freed[id] && gen < freed[id]
+              next
+            else
+              (merged[id] ||= {})[gen] = value
+            end
+          end
+        end
+      end
+      merged
+    end
+    ################################################################################
     # Read a xref table from the underlying buffer.
     #
     # If offset is specified the table will be loaded from there, otherwise the
@@ -107,7 +179,10 @@ class PDF::Reader
     # After seeking to the offset, processing is handed of to either load_xref_table()
     # or load_xref_stream() based on what we find there.
     #
-    #: (?Integer?) -> Hash[Symbol, untyped]
+    # Each call appends one section (entries + trailer) to @sections, newest first,
+    # then follows the /Prev chain (and /XRefStm hybrid references) recursively.
+    #
+    #: (?Integer?) -> void
     def load_offsets(offset = nil)
       offset ||= new_buffer.find_first_xref_offset
       offset += @junk_offset
@@ -116,7 +191,22 @@ class PDF::Reader
       tok_one = buf.token
 
       # we have a traditional xref table
-      return load_xref_table(buf) if tok_one == "xref" || tok_one == "ref"
+      if tok_one == "xref" || tok_one == "ref"
+        section = load_xref_table(buf)
+        @sections << section
+        trailer = section[:trailer]
+
+        # hybrid files keep some entries in an xref stream that belongs to the
+        # same revision as the traditional xref table
+        if trailer.has_key?(:XRefStm)
+          hybrid = load_xref_stream_at(trailer[:XRefStm].to_i)
+          merge_entries(section[:entries], hybrid[:entries])
+          trailer[:Prev] ||= hybrid[:trailer][:Prev]
+        end
+
+        load_prev(trailer[:Prev])
+        return
+      end
 
       tok_two   = buf.token
       tok_three = buf.token
@@ -129,7 +219,10 @@ class PDF::Reader
         # indirect object
         stream = PDF::Reader::Parser.new(buf).object(tok_one.to_i, tok_two.to_i)
         if stream.is_a?(PDF::Reader::Stream)
-          return load_xref_stream(stream)
+          section = load_xref_stream(stream)
+          @sections << section
+          load_prev(section[:trailer][:Prev])
+          return
         end
       end
 
@@ -137,11 +230,31 @@ class PDF::Reader
         "xref table not found at offset #{offset} (#{tok_one} != xref)"
     end
     ################################################################################
+    # Follow the /Prev pointer to the previous xref section. A broken chain is a
+    # hard error - without the previous sections the object map is incomplete and
+    # silently returning wrong objects is worse than failing loudly.
+    #
+    #: (untyped) -> void
+    def load_prev(prev)
+      # Some PDF creators seem to use '/Prev 0' in trailer if there is no previous xref
+      # It's not possible for an xref to appear at offset 0, so can safely skip the ref
+      return if prev.nil? || prev.to_i == 0
+
+      begin
+        load_offsets(prev.to_i)
+      rescue PDF::Reader::MalformedPDFError => e
+        raise PDF::Reader::MalformedPDFError,
+          "broken xref chain: unable to load previous xref section at byte offset " \
+          "#{prev.to_i} referenced via /Prev (#{e.message})"
+      end
+    end
+    ################################################################################
     # Assumes the underlying buffer is positioned at the start of a traditional
     # Xref table and processes it into memory.
     #
     #: (PDF::Reader::Buffer) -> Hash[Symbol, untyped]
     def load_xref_table(buf)
+      entries = {} #: Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]
       params = []
 
       while !params.include?("trailer") && !params.include?(nil)
@@ -162,7 +275,11 @@ class PDF::Reader
             if entry_index == 0 and objid == 1 and offset == 0 and generation == 65535 and state == 'f'
               objid = 0
             end
-            store(objid, generation, offset + @junk_offset) if state == "n" && offset > 0
+            if state == "n" && offset > 0
+              store_entry(entries, objid, generation, offset + @junk_offset)
+            elsif state == "f"
+              store_entry(entries, objid, generation, :free)
+            end
             objid += 1
             params.clear
           end
@@ -176,12 +293,28 @@ class PDF::Reader
         raise MalformedPDFError, "PDF malformed, trailer should be a dictionary"
       end
 
-      load_offsets(trailer[:XRefStm])   if trailer.has_key?(:XRefStm)
-      # Some PDF creators seem to use '/Prev 0' in trailer if there is no previous xref
-      # It's not possible for an xref to appear at offset 0, so can safely skip the ref
-      load_offsets(trailer[:Prev].to_i) if trailer.has_key?(:Prev) and trailer[:Prev].to_i != 0
-
-      trailer
+      { :entries => entries, :trailer => trailer }
+    end
+    ################################################################################
+    # Load the xref stream found at the given byte offset. Used for hybrid files
+    # where a traditional xref table points to a supplementary xref stream via
+    # the /XRefStm trailer key.
+    #
+    #: (Integer) -> Hash[Symbol, untyped]
+    def load_xref_stream_at(offset)
+      buf    = new_buffer(offset + @junk_offset)
+      obj_id = buf.token.to_i
+      gen    = buf.token.to_i
+      unless buf.token == "obj"
+        raise PDF::Reader::MalformedPDFError,
+          "xref stream not found at offset #{offset} referenced via /XRefStm"
+      end
+      stream = PDF::Reader::Parser.new(new_buffer(offset + @junk_offset)).object(obj_id, gen)
+      unless stream.is_a?(PDF::Reader::Stream)
+        raise PDF::Reader::MalformedPDFError,
+          "xref stream not found at offset #{offset} referenced via /XRefStm"
+      end
+      load_xref_stream(stream)
     end
 
     ################################################################################
@@ -196,6 +329,7 @@ class PDF::Reader
         [:Size, :Prev, :Root, :Encrypt, :Info, :ID].include?(key)
       }]
 
+      entries = {} #: Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]
       widths = stream.hash[:W]
 
       PDF::Reader::Error.validate_type_as_malformed(widths, "xref stream widths", Array)
@@ -216,20 +350,21 @@ class PDF::Reader
         obj_ids = (start_id..(start_id+(size-1)))
         obj_ids.each do |objid|
           entry = raw_data.read(entry_length) || ""
-          f1    = unpack_bytes(entry[0,widths[0]])
+          # a zero width type field defaults to type 1 (in-use), see PDF 32000-1:2008 7.5.8.2
+          f1    = widths[0].to_i == 0 ? 1 : unpack_bytes(entry[0,widths[0]])
           f2    = unpack_bytes(entry[widths[0],widths[1]])
           f3    = unpack_bytes(entry[widths[0]+widths[1],widths[2]])
           if f1 == 1 && f2 > 0
-            store(objid, f3, f2 + @junk_offset)
+            store_entry(entries, objid, f3, f2 + @junk_offset)
           elsif f1 == 2 && f2 > 0
-            store(objid, 0, PDF::Reader::Reference.new(f2, 0))
+            store_entry(entries, objid, 0, PDF::Reader::Reference.new(f2, 0))
+          elsif f1 == 0
+            store_entry(entries, objid, f3, :free)
           end
         end
       end
 
-      load_offsets(trailer[:Prev].to_i) if trailer.has_key?(:Prev)
-
-      trailer
+      { :entries => entries, :trailer => trailer }
     end
     ################################################################################
     # XRef streams pack info into integers 1-N bytes wide. Depending on the number of
@@ -265,11 +400,25 @@ class PDF::Reader
       PDF::Reader::Buffer.new(@io, :seek => offset)
     end
     ################################################################################
-    # Stores an offset value for a particular PDF object ID and revision number
+    # Stores an offset value for a particular PDF object ID and generation number
+    # within a single xref section. The value is a byte offset, a Reference to an
+    # object stream, or the :free tombstone for deleted objects.
     #
-    #: (Integer, Integer, Integer | PDF::Reader::Reference) -> (Integer | PDF::Reader::Reference)
-    def store(id, gen, offset)
-      (@xref[id] ||= {})[gen] ||= offset
+    #: (Hash[Integer, Hash[Integer, untyped]], Integer, Integer, untyped) -> untyped
+    def store_entry(entries, id, gen, value)
+      (entries[id] ||= {})[gen] ||= value
+    end
+    ################################################################################
+    # Merge the entries of a supplementary xref section (eg. the xref stream of a
+    # hybrid file) into another section without overwriting existing entries.
+    #
+    #: (Hash[Integer, Hash[Integer, untyped]], Hash[Integer, Hash[Integer, untyped]]) -> void
+    def merge_entries(target, source)
+      source.each do |id, gens|
+        gens.each do |gen, value|
+          store_entry(target, id, gen, value)
+        end
+      end
     end
     ################################################################################
     # Returns the offset of the PDF document in the +stream+. In theory this

@@ -113,14 +113,21 @@ module PDF
     #
     #   reader = PDF::Reader.new("somefile.pdf", :password => "apples")
     #
+    # If the source file has been incrementally saved you can read an older
+    # revision of the document instead of the latest state
+    #
+    #   reader = PDF::Reader.new("somefile.pdf", :revision => 0)
+    #
     # Using this method directly is supported, but it's more common to use
     # `PDF::Reader.open`
     #
     #: (String | Tempfile | IO | StringIO, ?Hash[untyped, untyped]) -> void
     def initialize(input, opts = {})
+      @input   = input #: untyped
+      @opts    = opts.dup #: Hash[untyped, untyped]
       @cache   = PDF::Reader::ObjectCache.new #: PDF::Reader::ObjectCache
-      opts.merge!(:cache => @cache)
-      @objects = PDF::Reader::ObjectHash.new(input, opts) #: PDF::Reader::ObjectHash
+      @opts[:cache] = @cache
+      @objects = PDF::Reader::ObjectHash.new(input, @opts) #: PDF::Reader::ObjectHash
       @page_count = nil #: Integer | nil
       @root = nil #: Hash[Symbol, untyped] | nil
     end
@@ -164,6 +171,51 @@ module PDF
     #: () -> Float
     def pdf_version
       @objects.pdf_version
+    end
+
+    # The number of revisions (incremental saves) found in the file. A file
+    # that has never been incrementally updated has 1 revision.
+    #
+    #: () -> Integer
+    def revision_count
+      @objects.revision_count
+    end
+
+    # The revision this reader is pinned to. 0 is the oldest revision,
+    # revision_count - 1 is the most recent.
+    #
+    #: () -> Integer
+    def revision_number
+      @objects.revision
+    end
+
+    # returns an array of PDF::Reader objects, one for each revision of the
+    # document from oldest to most recent. Each reader is an independent view
+    # of the document as it existed at that revision, with its own xref table,
+    # trailer and object cache, so the views can be used interchangeably.
+    #
+    #   reader = PDF::Reader.new("somefile.pdf")
+    #   reader.revisions.each do |revision|
+    #     puts revision.page_count
+    #   end
+    #
+    #: () -> Array[PDF::Reader]
+    def revisions
+      (0...revision_count).map { |num| revision(num) }
+    end
+
+    # returns a PDF::Reader that reads the document as it existed at the
+    # specified revision. 0 is the oldest revision, negative numbers count
+    # back from the most recent revision (-1 is the latest state, equivalent
+    # to the default behaviour).
+    #
+    #   reader = PDF::Reader.new("somefile.pdf")
+    #   first_save = reader.revision(0)
+    #   puts first_save.page_count
+    #
+    #: (Integer) -> PDF::Reader
+    def revision(num)
+      self.class.new(@input, @opts.merge(:revision => num))
     end
 
     # syntactic sugar for opening a PDF file and the most common approach. Accepts the
