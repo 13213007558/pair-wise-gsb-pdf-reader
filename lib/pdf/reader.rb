@@ -232,6 +232,17 @@ module PDF
       PDF::Reader::Page.new(@objects, num, :cache => @cache)
     end
 
+    # Return a read-only model of the document's AcroForm. The returned object
+    # does not execute JavaScript and does not regenerate widget appearance
+    # streams; structural and value conflicts are exposed via diagnostics.
+    #
+    #: () -> PDF::Reader::AcroForm
+    def acroform
+      @acroform ||= PDF::Reader::AcroForm.new(@objects)
+    end
+
+    alias_method :form, :acroform
+
     private
 
     #: () -> Hash[Symbol, untyped]
@@ -282,6 +293,7 @@ require 'pdf/reader/standard_key_builder'
 require 'pdf/reader/key_builder_v5'
 require 'pdf/reader/aes_v2_security_handler'
 require 'pdf/reader/aes_v3_security_handler'
+require 'pdf/reader/acroform'
 require 'pdf/reader/rc4'
 require 'pdf/reader/rc4_security_handler'
 require 'pdf/reader/unimplemented_security_handler'

@@ -1,4 +1,13 @@
 ---
+data/acroform/malformed_fields.pdf:
+  :bytes: 1388
+  :md5: e9694b58487f2245c476b3934c1a314c
+data/acroform/merged_dicts.pdf:
+  :bytes: 1376
+  :md5: d4986bd57a9a5eca475d4bfcf3a6f4d8
+data/acroform/separated_dicts.pdf:
+  :bytes: 2231
+  :md5: 4c6fda4f863696500390067731c06693
 data/20070313 - 2nd Laptop Battery.pdf:
   :bytes: 27832
   :md5: be3427795b673615e42f89b9043d44d9

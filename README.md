@@ -97,6 +97,31 @@ reader  = PDF::Reader.new("somefile.pdf")
 puts reader.objects.inspect
 ```
 
+# Forms
+
+Filled-in AcroForm fields can be inspected through a read-only model. Fields
+are grouped by their full hierarchical name, configuration is inherited from
+parent field and AcroForm dictionaries, and each field exposes its widgets and
+associated pages.
+
+```ruby
+form = PDF::Reader.new("somefile.pdf").acroform
+
+form.fields.each do |field|
+  puts field.name
+  puts field.type
+  puts field.value.inspect
+  puts field.page_numbers.inspect
+end
+
+conflicted = form.fields.select(&:conflict?)
+puts form.diagnostics.inspect
+```
+
+The model preserves disagreements between a field's V entry and its widgets'
+AS/AP entries instead of silently choosing one. It does not regenerate
+appearance streams or execute form JavaScript.
+
 # Text Encoding
 
 Regardless of the internal encoding used in the PDF all text will be converted
