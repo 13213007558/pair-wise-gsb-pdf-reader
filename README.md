@@ -73,6 +73,22 @@ reader.pages.each do |page|
 end
 ```
 
+An incrementally saved PDF keeps every previous cross-reference section. Use
+`revisions` to access each saved state independently. Revision indexes are
+zero-based, and a reader created with `PDF::Reader.new` still reads the latest
+state by default.
+
+```ruby
+reader = PDF::Reader.new("incrementally-saved.pdf")
+
+reader.revisions.each_with_index do |revision, index|
+  puts "Revision #{index + 1}: #{revision.page(1).text}"
+end
+
+old_reader = reader.revision(0)
+latest_reader = reader.revision(-1)
+```
+
 If you need to access the full program for rendering a page, use the walk() method
 of PDF::Reader::Page.
 

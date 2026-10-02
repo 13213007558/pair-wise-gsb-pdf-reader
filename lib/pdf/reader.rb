@@ -98,6 +98,9 @@ module PDF
     #: PDF::Reader::ObjectHash
     attr_reader :objects
 
+    #: Integer
+    attr_reader :revision_number
+
     # creates a new document reader for the provided PDF.
     #
     # input can be an IO-ish object (StringIO, File, etc) containing a PDF
@@ -118,11 +121,28 @@ module PDF
     #
     #: (String | Tempfile | IO | StringIO, ?Hash[untyped, untyped]) -> void
     def initialize(input, opts = {})
-      @cache   = PDF::Reader::ObjectCache.new #: PDF::Reader::ObjectCache
-      opts.merge!(:cache => @cache)
-      @objects = PDF::Reader::ObjectHash.new(input, opts) #: PDF::Reader::ObjectHash
+      @password = opts[:password]
+      @cache    = opts[:cache] || PDF::Reader::ObjectCache.new #: PDF::Reader::ObjectCache
+      @objects = PDF::Reader::ObjectHash.new(input, opts.merge(:cache => @cache)) #: PDF::Reader::ObjectHash
+      @revision_number = @objects.effective_revision.number
       @page_count = nil #: Integer | nil
       @root = nil #: Hash[Symbol, untyped] | nil
+    end
+
+    # Return one Reader for each incremental revision. Index 0 is the initial
+    # save, while the last Reader represents the same state as the parent reader.
+    #
+    #: () -> Array[PDF::Reader]
+    def revisions
+      @objects.revisions.map { |objects| build_revision(objects) }
+    end
+
+    # Return a Reader scoped to one incremental revision. Negative indexes count
+    # backwards from the latest revision.
+    #
+    #: (Integer) -> PDF::Reader
+    def revision(index)
+      build_revision(@objects.revision(index))
     end
 
     # Return a Hash with some basic information about the PDF file
@@ -233,6 +253,23 @@ module PDF
     end
 
     private
+
+    #: (PDF::Reader::ObjectHash) -> PDF::Reader
+    def build_revision(objects)
+      reader = self.class.allocate
+      reader.send(:initialize_revision, objects)
+      reader
+    end
+
+    #: (PDF::Reader::ObjectHash) -> void
+    def initialize_revision(objects)
+      @password = nil
+      @cache = objects.cache
+      @objects = objects
+      @revision_number = objects.effective_revision.number
+      @page_count = nil
+      @root = nil
+    end
 
     #: () -> Hash[Symbol, untyped]
     def root

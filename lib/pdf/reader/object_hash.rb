@@ -43,6 +43,15 @@ class PDF::Reader
     #: untyped
     attr_accessor :default
 
+    #: untyped
+    attr_reader :io
+
+    #: PDF::Reader::XRef | PDF::Reader::XRef::Revision
+    attr_reader :revision
+
+    #: PDF::Reader::ObjectCache
+    attr_reader :cache
+
     #: Hash[Symbol, untyped]
     attr_reader :trailer
 
@@ -61,19 +70,43 @@ class PDF::Reader
     #
     #: (untyped, ?Hash[Symbol, untyped]) -> void
     def initialize(input, opts = {})
-      @io          = extract_io_from(input) #: untyped
-      @xref        = PDF::Reader::XRef.new(@io) #: PDF::Reader::XRef[PDF::Reader::Reference]
+      @revision    = opts[:revision] #: PDF::Reader::XRef::Revision?
+      if @revision
+        @io = input
+        @xref_data = opts.fetch(:xref) #: PDF::Reader::XRef
+      else
+        @io = extract_io_from(input) #: untyped
+        @xref_data = opts[:xref] || PDF::Reader::XRef.new(@io) #: PDF::Reader::XRef
+      end
       @pdf_version = read_version #: Float
-      @trailer     = @xref.trailer #: Hash[Symbol, untyped]
-      @cache       = opts[:cache] || PDF::Reader::ObjectCache.new #: PDF::Reader::ObjectCache
+      @trailer     = effective_revision.trailer #: Hash[Symbol, untyped]
+      @cache       = opts[:cache] || PDF::Reader::ObjectCache.new
+      @password    = opts[:password]
       @sec_handler = NullSecurityHandler.new #: securityHandler
       @sec_handler = SecurityHandlerFactory.build(
         deref(trailer[:Encrypt]),
         deref(trailer[:ID]),
-        opts[:password]
+        @password
       )
       @page_references = nil #: Array[PDF::Reader::Reference | Hash[Symbol, untyped]]?
       @object_streams = nil #: Hash[PDF::Reader::Reference, PDF::Reader::ObjectStream]?
+    end
+
+    #: () -> Array[PDF::Reader::ObjectHash]
+    def revisions
+      @xref_data.revisions.map { |revision| build_revision(revision) }
+    end
+
+    #: (Integer) -> PDF::Reader::ObjectHash
+    def revision(index)
+      build_revision(@xref_data.revision(index))
+    end
+
+    # The cross-reference revision currently visible through this object store.
+    #
+    #: () -> PDF::Reader::XRef::Revision
+    def effective_revision
+      @revision || @xref_data.revisions.last
     end
 
     # returns the type of object a ref points to
@@ -93,9 +126,7 @@ class PDF::Reader
     # Access an object from the PDF. key can be an int or a PDF::Reader::Reference
     # object.
     #
-    # If an int is used, the object with that ID and a generation number of 0 will
-    # be returned.
-    #
+    # If an int is used, the current generation for the ID in this revision is used.
     # If a PDF::Reader::Reference object is used the exact ID and generation number
     # can be specified.
     #
@@ -104,7 +135,9 @@ class PDF::Reader
       return default if key.to_i <= 0
 
       unless key.is_a?(PDF::Reader::Reference)
-        key = PDF::Reader::Reference.new(key.to_i, 0)
+        generation = xref.generation_for(key.to_i)
+        return default if generation.nil?
+        key = PDF::Reader::Reference.new(key.to_i, generation)
       end
 
       @cache[key] ||= fetch_object(key) || fetch_object_stream(key)
@@ -403,7 +436,7 @@ class PDF::Reader
     # @override(allow_incompatible: true)
     #: () { (PDF::Reader::Reference, untyped) -> untyped } -> untyped
     def each(&block)
-      @xref.each do |ref|
+      xref.each do |ref|
         yield ref, self[ref]
       end
     end
@@ -541,6 +574,11 @@ class PDF::Reader
 
     private
 
+    #: (PDF::Reader::XRef::Revision) -> PDF::Reader::ObjectHash
+    def build_revision(revision)
+      self.class.new(@io, :revision => revision, :xref => @xref_data, :password => @password)
+    end
+
     # parse a traditional object from the PDF, starting from the byte offset indicated
     # in the xref table
     #
@@ -667,9 +705,9 @@ class PDF::Reader
       PDF::Reader::Buffer.new(@io, :seek => offset)
     end
 
-    #: () -> PDF::Reader::XRef[PDF::Reader::Reference]
+    #: () -> (PDF::Reader::XRef | PDF::Reader::XRef::Revision)
     def xref
-      @xref
+      @revision || @xref_data
     end
 
     #: () -> Hash[PDF::Reader::Reference, PDF::Reader::ObjectStream]

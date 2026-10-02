@@ -28,6 +28,77 @@
 ################################################################################
 
 class PDF::Reader
+  class XRef
+    # Represents the cross-reference table and trailer that were effective at
+    # one point in an incrementally updated PDF file.
+    class Revision
+      FREE_ENTRY = :free
+
+      #: Integer
+      attr_reader :number
+
+      #: Integer
+      attr_reader :offset
+
+      #: Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]
+      attr_reader :entries
+
+      #: Hash[Symbol, untyped]
+      attr_reader :trailer
+
+      #: (Integer, Integer, Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]], Hash[Symbol, untyped]) -> void
+      def initialize(number, offset, entries, trailer)
+        @number = number
+        @offset = offset
+        @entries = entries
+        @trailer = trailer
+      end
+
+      #: (PDF::Reader::Reference) -> (Integer | PDF::Reader::Reference)
+      def [](ref)
+        location = entries.fetch(ref.id, {}).fetch(ref.gen) do
+          raise InvalidObjectError, "Object #{ref.id}, Generation #{ref.gen} is invalid"
+        end
+
+        if location == FREE_ENTRY
+          raise InvalidObjectError, "Object #{ref.id}, Generation #{ref.gen} is free"
+        end
+
+        location
+      end
+
+      #: (Integer) -> Integer?
+      def generation_for(id)
+        generations = entries[id]
+        return nil if generations.nil?
+
+        generations.keys.reject { |gen| generations[gen] == FREE_ENTRY }.max
+      end
+
+      #: (Integer | PDF::Reader::Reference) -> bool
+      def free?(ref)
+        ref = PDF::Reader::Reference.new(ref.to_i, 0) unless ref.is_a?(PDF::Reader::Reference)
+        entries.fetch(ref.id, {}).values.include?(FREE_ENTRY)
+      end
+
+      #: () -> Integer
+      def size
+        entries.count { |id, generations| id != 0 && !generations.values.include?(FREE_ENTRY) }
+      end
+
+      #: () { (PDF::Reader::Reference) -> untyped } -> void
+      def each(&block)
+        entries.keys.sort.each do |id|
+          next if id == 0
+
+          gen = generation_for(id)
+          yield PDF::Reader::Reference.new(id, gen) unless gen.nil?
+        end
+      end
+      include Enumerable
+    end
+  end
+
   ################################################################################
   # An internal PDF::Reader class that represents the XRef table in a PDF file as a
   # hash-like object.
@@ -50,8 +121,13 @@ class PDF::Reader
   class XRef
     include Enumerable
 
+    FREE_ENTRY = Revision::FREE_ENTRY
+
     #: Hash[Symbol, untyped]
     attr_reader :trailer
+
+    #: Array[PDF::Reader::XRef::Revision]
+    attr_reader :revisions
 
     ################################################################################
     # create a new Xref table based on the contents of the supplied io object
@@ -62,8 +138,20 @@ class PDF::Reader
     def initialize(io)
       @io = io
       @junk_offset = calc_junk_offset(io) || 0 #: Integer
-      @xref = {} #: Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference]]
-      @trailer = load_offsets #: Hash[Symbol, untyped]
+      @xref = {} #: Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]
+      @revisions = [] #: Array[Revision]
+      @trailer = load_revisions #: Hash[Symbol, untyped]
+    end
+
+    #: (Integer) -> Revision
+    def revision(index)
+      index += revisions.size if index < 0
+
+      unless index >= 0 && index < revisions.size
+        raise RangeError, "revision #{index} is outside 0..#{revisions.size - 1}"
+      end
+
+      revisions[index]
     end
 
     ################################################################################
@@ -80,9 +168,17 @@ class PDF::Reader
     # ref - a PDF::Reader::Reference object containing an object ID and revision number
     #: (untyped) -> untyped
     def [](ref)
-      @xref.fetch(ref.id, {}).fetch(ref.gen)
-    rescue
-      raise InvalidObjectError, "Object #{ref.id}, Generation #{ref.gen} is invalid"
+      revisions.last[ref]
+    end
+
+    #: (Integer) -> Integer?
+    def generation_for(id)
+      revisions.last.generation_for(id)
+    end
+
+    #: (Integer | PDF::Reader::Reference) -> bool
+    def free?(ref)
+      revisions.last.free?(ref)
     end
     ################################################################################
     # iterate over each object in the xref table
@@ -90,58 +186,177 @@ class PDF::Reader
     # @override(allow_incompatible: true)
     #: () { (PDF::Reader::Reference) -> untyped } -> void
     def each(&block)
-      ids = @xref.keys.sort
-      ids.each do |id|
-        gen = @xref.fetch(id, {}).keys.sort[-1]
-        yield PDF::Reader::Reference.new(id, gen.to_i)
-      end
+      revisions.last.each(&block)
     end
+
     ################################################################################
     private
     ################################################################################
-    # Read a xref table from the underlying buffer.
-    #
-    # If offset is specified the table will be loaded from there, otherwise the
-    # default offset will be located and used.
-    #
-    # After seeking to the offset, processing is handed of to either load_xref_table()
-    # or load_xref_stream() based on what we find there.
-    #
-    #: (?Integer?) -> Hash[Symbol, untyped]
-    def load_offsets(offset = nil)
+    #: () -> Hash[Symbol, untyped]
+    def load_revisions
+      sections = []
+      visited = {}
+      load_section(nil, true, sections, visited)
+
+      entries = {}
+      compatible_entries = {}
+      trailer = {}
+
+      sections.each_with_index do |section, index|
+        entries = merge_entries(entries, section[:entries])
+        compatible_entries = merge_compatible_entries(compatible_entries, section[:entries])
+        trailer = merge_trailer(trailer, section[:trailer], section[:entries])
+        @revisions << Revision.new(index + 1, section[:offset], entries, trailer)
+      end
+
+      @xref = compatible_entries.reject { |id, _generations| id == 0 }
+      trailer
+    end
+
+    #: (Integer?, bool, Array[Hash[Symbol, untyped]], Hash[Integer, bool]) -> [Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]], Hash[Symbol, untyped]]
+    def load_section(offset, include_junk_offset, sections, visited)
       offset ||= new_buffer.find_first_xref_offset
-      offset += @junk_offset
+      offset += @junk_offset if include_junk_offset
+
+      if visited.key?(offset)
+        raise MalformedPDFError, "invalid xref chain: cycle detected at offset #{offset}"
+      end
+      visited[offset] = true
+
+      entries, trailer = parse_section(offset)
+
+      if trailer.has_key?(:XRefStm)
+        xrefstm_offset = trailer[:XRefStm].to_i
+        begin
+          xrefstm_entries, xrefstm_trailer = parse_section(xrefstm_offset)
+        rescue MalformedPDFError => error
+          raise MalformedPDFError,
+            "invalid /XRefStm reference at xref offset #{offset}: #{error.message}"
+        end
+        entries = merge_entries(xrefstm_entries, entries)
+        trailer = xrefstm_trailer.dup.merge(trailer).tap { |dict| dict.delete(:XRefStm) }
+      end
+
+      if trailer.has_key?(:Prev) && trailer[:Prev].to_i != 0
+        begin
+          load_section(trailer[:Prev].to_i, false, sections, visited)
+        rescue MalformedPDFError => error
+          raise MalformedPDFError,
+            "invalid /Prev chain at xref offset #{offset}: #{error.message}"
+        end
+      end
+
+      sections << {
+        :offset => offset,
+        :entries => entries,
+        :trailer => trailer.dup.tap { |dict|
+          dict.delete(:Prev)
+        }
+      }
+
+      [entries, trailer]
+    end
+
+    #: (Integer, Hash[Integer, bool]?) -> [Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]], Hash[Symbol, untyped]]
+    def parse_section(offset, visited = nil)
+      if visited && visited.key?(offset)
+        raise MalformedPDFError, "invalid xref chain: cycle detected at offset #{offset}"
+      end
+      visited[offset] = true unless visited.nil?
 
       buf = new_buffer(offset)
       tok_one = buf.token
 
-      # we have a traditional xref table
-      return load_xref_table(buf) if tok_one == "xref" || tok_one == "ref"
+      if tok_one == "xref" || tok_one == "ref"
+        entries = {}
+        trailer = load_xref_table(buf, entries)
+        return [entries, trailer]
+      else
+        tok_two   = buf.token
+        tok_three = buf.token
 
-      tok_two   = buf.token
-      tok_three = buf.token
-
-      # we have an XRef stream
-      if tok_one.to_i >= 0 && tok_two.to_i >= 0 && tok_three == "obj"
-        buf = new_buffer(offset)
-        # Maybe we should be parsing the ObjectHash second argument to the Parser here,
-        # to handle the case where an XRef Stream has the Length specified via an
-        # indirect object
-        stream = PDF::Reader::Parser.new(buf).object(tok_one.to_i, tok_two.to_i)
-        if stream.is_a?(PDF::Reader::Stream)
-          return load_xref_stream(stream)
+        if tok_one.to_i >= 0 && tok_two.to_i >= 0 && tok_three == "obj"
+          buf = new_buffer(offset)
+          stream = PDF::Reader::Parser.new(buf).object(tok_one.to_i, tok_two.to_i)
+          if stream.is_a?(PDF::Reader::Stream)
+            entries = {}
+            trailer = load_xref_stream(stream, entries)
+            return [entries, trailer]
+          end
         end
+
+        raise PDF::Reader::MalformedPDFError,
+          "xref table not found at offset #{offset} (#{tok_one} != xref)"
+      end
+    end
+
+    #: (Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]], Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]) -> Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]
+    def merge_entries(old_entries, new_entries)
+      merged = old_entries.each_with_object({}) do |(id, generations), result|
+        result[id] = generations.dup
       end
 
-      raise PDF::Reader::MalformedPDFError,
-        "xref table not found at offset #{offset} (#{tok_one} != xref)"
+      new_entries.each do |id, generations|
+        if generations.values.include?(FREE_ENTRY)
+          free_generations = generations.select { |_generation, location| location == FREE_ENTRY }
+          merged[id] = free_generations
+          next
+        end
+
+        merged[id] ||= {}
+        generations.each do |gen, location|
+          if location == FREE_ENTRY
+            merged[id].delete(gen)
+          else
+            merged[id][gen] = location
+          end
+        end
+        merged.delete(id) if merged[id].empty?
+      end
+
+      merged
+    end
+
+    # Older releases exposed the union of all in-use entries from the Prev chain
+    # in this raw, internal hash. Revision instances enforce current free entries.
+    def merge_compatible_entries(old_entries, new_entries)
+      merged = old_entries.each_with_object({}) do |(id, generations), result|
+        result[id] = generations.dup
+      end
+
+      new_entries.each do |id, generations|
+        next if id == 0
+
+        merged[id] ||= {}
+        generations.each do |gen, location|
+          merged[id][gen] = location unless location == FREE_ENTRY
+        end
+        merged.delete(id) if merged[id].empty?
+      end
+
+      merged
+    end
+
+    #: (Hash[Symbol, untyped], Hash[Symbol, untyped], Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]) -> Hash[Symbol, untyped]
+    def merge_trailer(old_trailer, new_trailer, new_entries)
+      merged = old_trailer.dup
+      merged.each_key do |key|
+        next if new_trailer.key?(key)
+        value = merged[key]
+        generations = value.is_a?(PDF::Reader::Reference) ? new_entries[value.id] : nil
+        if value.is_a?(PDF::Reader::Reference) &&
+          (generations.nil? || !generations.key?(value.gen))
+          merged.delete(key)
+        end
+      end
+      merged.merge(new_trailer)
     end
     ################################################################################
     # Assumes the underlying buffer is positioned at the start of a traditional
     # Xref table and processes it into memory.
     #
-    #: (PDF::Reader::Buffer) -> Hash[Symbol, untyped]
-    def load_xref_table(buf)
+    #: (PDF::Reader::Buffer, Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]) -> Hash[Symbol, untyped]
+    def load_xref_table(buf, entries)
       params = []
 
       while !params.include?("trailer") && !params.include?(nil)
@@ -162,7 +377,11 @@ class PDF::Reader
             if entry_index == 0 and objid == 1 and offset == 0 and generation == 65535 and state == 'f'
               objid = 0
             end
-            store(objid, generation, offset + @junk_offset) if state == "n" && offset > 0
+            if state == "n" && offset > 0
+              store(entries, objid, generation, offset + @junk_offset)
+            elsif state == "f"
+              store(entries, objid, generation, FREE_ENTRY)
+            end
             objid += 1
             params.clear
           end
@@ -176,25 +395,20 @@ class PDF::Reader
         raise MalformedPDFError, "PDF malformed, trailer should be a dictionary"
       end
 
-      load_offsets(trailer[:XRefStm])   if trailer.has_key?(:XRefStm)
-      # Some PDF creators seem to use '/Prev 0' in trailer if there is no previous xref
-      # It's not possible for an xref to appear at offset 0, so can safely skip the ref
-      load_offsets(trailer[:Prev].to_i) if trailer.has_key?(:Prev) and trailer[:Prev].to_i != 0
-
       trailer
     end
 
     ################################################################################
     # Read an XRef stream from the underlying buffer instead of a traditional xref table.
     #
-    #: (PDF::Reader::Stream) -> Hash[Symbol, untyped]
-    def load_xref_stream(stream)
+    #: (PDF::Reader::Stream, Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]) -> Hash[Symbol, untyped]
+    def load_xref_stream(stream, entries = {})
       unless stream.hash[:Type] == :XRef
         raise PDF::Reader::MalformedPDFError, "xref stream not found when expected"
       end
-      trailer = Hash[stream.hash.select { |key, value|
-        [:Size, :Prev, :Root, :Encrypt, :Info, :ID].include?(key)
-      }]
+      trailer = stream.hash.reject { |key, _value|
+        [:Type, :W, :Index, :Length, :Filter, :DecodeParms].include?(key)
+      }
 
       widths = stream.hash[:W]
 
@@ -219,15 +433,15 @@ class PDF::Reader
           f1    = unpack_bytes(entry[0,widths[0]])
           f2    = unpack_bytes(entry[widths[0],widths[1]])
           f3    = unpack_bytes(entry[widths[0]+widths[1],widths[2]])
-          if f1 == 1 && f2 > 0
-            store(objid, f3, f2 + @junk_offset)
+          if f1 == 0
+            store(entries, objid, f3, FREE_ENTRY)
+          elsif f1 == 1 && f2 > 0
+            store(entries, objid, f3, f2 + @junk_offset)
           elsif f1 == 2 && f2 > 0
-            store(objid, 0, PDF::Reader::Reference.new(f2, 0))
+            store(entries, objid, 0, PDF::Reader::Reference.new(f2, 0))
           end
         end
       end
-
-      load_offsets(trailer[:Prev].to_i) if trailer.has_key?(:Prev)
 
       trailer
     end
@@ -268,9 +482,11 @@ class PDF::Reader
     # Stores an offset value for a particular PDF object ID and revision number
     #
     #: (Integer, Integer, Integer | PDF::Reader::Reference) -> (Integer | PDF::Reader::Reference)
-    def store(id, gen, offset)
-      (@xref[id] ||= {})[gen] ||= offset
+    def store(entries, id, gen, offset)
+      (entries[id] ||= {})[gen] ||= offset
     end
+
+    #: (PDF::Reader::Stream, Hash[Integer, Hash[Integer, Integer | PDF::Reader::Reference | Symbol]]?=nil) -> Hash[Symbol, untyped]
     ################################################################################
     # Returns the offset of the PDF document in the +stream+. In theory this
     # should always be 0, but all sort of crazy junk is prefixed to PDF files
