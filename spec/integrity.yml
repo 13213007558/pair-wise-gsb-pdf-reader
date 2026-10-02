@@ -479,3 +479,12 @@ data/zeroed_xref_entry.pdf:
 data/zlib_stream_issue.pdf:
   :bytes: 68247
   :md5: 744d2db962d2aeec04e00891b71b3d5c
+data/embedded_files_af.pdf:
+  :bytes: 2064
+  :md5: 58a10fbf618ab9365d00c195517f62df
+data/embedded_files_broken_name_tree.pdf:
+  :bytes: 974
+  :md5: 4e5a2517eae9122e5d98e22a56df5527
+data/embedded_files_name_tree.pdf:
+  :bytes: 1986
+  :md5: 8bea7d3e95aa4c810ee62a6f49300d04

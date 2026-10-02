@@ -97,6 +97,28 @@ reader  = PDF::Reader.new("somefile.pdf")
 puts reader.objects.inspect
 ```
 
+Embedded files (attachments) referenced by the document EmbeddedFiles name
+tree or by /AF arrays on the catalog, pages or other objects can be listed
+and read like so:
+
+```ruby
+reader = PDF::Reader.new("somefile.pdf")
+
+reader.embedded_files.each do |file|
+  puts file.name         # names can be duplicated, don't rely on them for identity
+  puts file.scope        # :document, :page, :object or :unknown
+  puts file.relationship # the AFRelationship, e.g. :Data or :Source
+
+  if file.status == :ok
+    # choose your own extraction path, never trust the PDF-provided filename
+    File.binwrite(File.basename(file.name), file.data)
+  end
+end
+```
+
+External file references are never followed and embedded content is never
+executed.
+
 # Text Encoding
 
 Regardless of the internal encoding used in the PDF all text will be converted

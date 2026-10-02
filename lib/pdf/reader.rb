@@ -232,6 +232,26 @@ module PDF
       PDF::Reader::Page.new(@objects, num, :cache => @cache)
     end
 
+    # returns an array of PDF::Reader::EmbeddedFile objects, one for each
+    # embedded file (attachment) reference in the source PDF. References
+    # are collected from the document EmbeddedFiles name tree and from
+    # /AF arrays on the catalog, pages and other objects.
+    #
+    #   reader = PDF::Reader.new("somefile.pdf")
+    #   reader.embedded_files.each do |file|
+    #     puts file.name
+    #     File.binwrite(File.basename(file.name), file.data) if file.status == :ok
+    #   end
+    #
+    # Names may be duplicated - select entries by identity and decide on
+    # extraction paths yourself rather than trusting the PDF-provided
+    # filename.
+    #
+    #: () -> Array[PDF::Reader::EmbeddedFile]
+    def embedded_files
+      PDF::Reader::EmbeddedFiles.new(@objects).entries
+    end
+
     private
 
     #: () -> Hash[Symbol, untyped]
@@ -251,6 +271,8 @@ require 'pdf/reader/cid_widths'
 require 'pdf/reader/cmap'
 require 'pdf/reader/encoding'
 require 'pdf/reader/encoding_utils'
+require 'pdf/reader/embedded_file'
+require 'pdf/reader/embedded_files'
 require 'pdf/reader/error'
 require 'pdf/reader/filter'
 require 'pdf/reader/filter/ascii85'

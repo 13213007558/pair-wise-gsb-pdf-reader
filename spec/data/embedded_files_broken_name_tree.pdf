@@ -1,0 +1,50 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Params << /Size 32 /CheckSum <ff962463de8374faad39611e18e27088> >> /Length 32 >>
+stream
+reachable before the corruption
+
+endstream
+endobj
+2 0 obj
+<< /Params << /Size 25 /CheckSum <ba67ef4bb8d3582fadb0ed46527cfa8f> >> /Length 25 >>
+stream
+orphan filespec contents
+
+endstream
+endobj
+3 0 obj
+<< /Type /Filespec /F (reachable.txt) /UF (reachable.txt) /EF << /F 1 0 R >> >>
+endobj
+4 0 obj
+<< /Type /Filespec /F (orphan.txt) /UF (orphan.txt) /EF << /F 2 0 R >> >>
+endobj
+5 0 obj
+<< /Names [(reachable.txt) 3 0 R (dangling.txt)] /Kids [104 0 R] >>
+endobj
+6 0 obj
+<< /EmbeddedFiles 5 0 R >>
+endobj
+7 0 obj
+<< /Type /Pages /Count 0 /Kids [] >>
+endobj
+8 0 obj
+<< /Type /Catalog /Pages 7 0 R /Names 6 0 R >>
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000015 00000 n 
+0000000165 00000 n 
+0000000308 00000 n 
+0000000403 00000 n 
+0000000492 00000 n 
+0000000575 00000 n 
+0000000617 00000 n 
+0000000669 00000 n 
+trailer
+<< /Size 9 /Root 8 0 R >>
+startxref
+731
+%%EOF
