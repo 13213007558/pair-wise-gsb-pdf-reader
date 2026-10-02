@@ -104,6 +104,32 @@ to UTF-8 before it is passed back from PDF::Reader.
 
 Strings that contain binary data (like font blobs) will be marked as such.
 
+# Digital Signatures
+
+PDF::Reader can verify CMS based digital signatures (the adbe.pkcs7.detached
+and ETSI.CAdES.detached SubFilters) offline, against the raw bytes of the file:
+
+```ruby
+results = PDF::Reader::SignatureVerifier.new("signed.pdf").verify(
+  trusted_certificates: [OpenSSL::X509::Certificate.new(File.read("ca.pem"))]
+)
+
+results.each do |result|
+  result.cms_valid?        # the CMS signature verifies over the signed bytes
+  result.trusted?          # the signer chains to your trusted certificates
+  result.signed_revision   # which PDF revision the signature covers (1-based)
+  result.appended?         # bytes (e.g. a newer revision) follow the signed ones
+  result.errors            # structural ByteRange problems, if any
+end
+```
+
+The ByteRange structure is strictly checked (ordering, bounds, overlap, and
+that the uncovered gap is exactly the /Contents placeholder) before any
+cryptography runs. Verification never touches the network: trust is evaluated
+only against the certificates you pass in, and no CRLs are fetched. A later
+incremental save appended to the file does not invalidate the signature of the
+earlier revision - it is reported via appended? instead.
+
 # Former API
 
 Version 1.0.0 of PDF::Reader introduced a new page-based API that provides
