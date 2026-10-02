@@ -123,6 +123,7 @@ module PDF
       @objects = PDF::Reader::ObjectHash.new(input, opts) #: PDF::Reader::ObjectHash
       @page_count = nil #: Integer | nil
       @root = nil #: Hash[Symbol, untyped] | nil
+      @signatures = nil #: Array[PDF::Reader::Signature] | nil
     end
 
     # Return a Hash with some basic information about the PDF file
@@ -180,6 +181,21 @@ module PDF
     #   end
     #
     #: (String | Tempfile | IO, ?Hash[untyped, untyped]) { (PDF::Reader) -> void } -> untyped
+    # Returns an array of PDF::Reader::Signature objects, one for each
+    # digital signature dictionary in the file. Each signature can be
+    # verified offline against the raw file bytes:
+    #
+    #   reader.signatures.each do |sig|
+    #     result = sig.verify(trusted_certs: [ca_cert])
+    #     puts result.valid?
+    #     puts result.trusted?
+    #   end
+    #
+    #: () -> Array[PDF::Reader::Signature]
+    def signatures
+      @signatures ||= PDF::Reader::Signature.find_all(@objects)
+    end
+
     def self.open(input, opts = {}, &block)
       yield PDF::Reader.new(input, opts)
     end
@@ -243,6 +259,8 @@ module PDF
 end
 ################################################################################
 
+require 'pdf/reader/signature'
+require 'pdf/reader/signature_verification'
 require 'pdf/reader/resources'
 require 'pdf/reader/advanced_text_run_filter'
 require 'pdf/reader/buffer'

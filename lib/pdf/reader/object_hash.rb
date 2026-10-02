@@ -46,6 +46,12 @@ class PDF::Reader
     #: Hash[Symbol, untyped]
     attr_reader :trailer
 
+    # The raw IO-like object (StringIO, File, ...) the objects are read
+    # from. Useful for code that needs access to the raw bytes of the
+    # file, like digital signature verification.
+    #: untyped
+    attr_reader :io
+
     #: Float
     attr_reader :pdf_version
 

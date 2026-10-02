@@ -1,3 +1,9 @@
+Unreleased
+- Add offline digital signature verification for the adbe.pkcs7.detached and
+  ETSI.CAdES.detached sub filters via PDF::Reader#signatures. Reports CMS
+  cryptographic validity, explicit trust policy checks, the covered PDF
+  revision, and content appended after signing
+
 v2.16.0 (9th August 2026)
 - Add new method that use Point(x, y) instead of Array[Integer], for improved typing with sorbet (https://github.com/yob/pdf-reader/pull/578)
 - Support extracting text via ActualText annotations (https://github.com/yob/pdf-reader/pull/587)
