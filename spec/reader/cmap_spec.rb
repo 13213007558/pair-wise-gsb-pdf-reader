@@ -290,4 +290,74 @@ describe PDF::Reader::CMap do
       end
     end
   end
+
+  describe "#wmode" do
+    def cmap_with_header(header)
+      PDF::Reader::CMap.new(<<-CMAP)
+        /CIDInit /ProcSet findresource begin
+        12 dict begin
+        begincmap
+        #{header}
+        1 begincodespacerange
+        <0000> <FFFF>
+        endcodespacerange
+        1 beginbfchar
+        <0001> <0041>
+        endbfchar
+        endcmap
+        CMapName currentdict /CMap defineresource pop
+        end
+        end
+      CMAP
+    end
+
+    context "cmap with no WMode entry" do
+      it "defaults to horizontal (0)" do
+        map = cmap_with_header("/CMapName /Probe-H def")
+        expect(map.wmode).to eq(0)
+      end
+    end
+
+    context "cmap with an explicit WMode of 0" do
+      it "is horizontal" do
+        map = cmap_with_header("/WMode 0 def")
+        expect(map.wmode).to eq(0)
+      end
+    end
+
+    context "cmap with an explicit WMode of 1" do
+      it "is vertical" do
+        map = cmap_with_header("/WMode 1 def")
+        expect(map.wmode).to eq(1)
+      end
+    end
+
+    context "cmap that inherits from a vertical predefined CMap via UseCMap" do
+      it "is vertical" do
+        map = cmap_with_header("/UseCMap /Identity-V def")
+        expect(map.wmode).to eq(1)
+      end
+    end
+
+    context "cmap that inherits from a horizontal predefined CMap via UseCMap" do
+      it "is horizontal" do
+        map = cmap_with_header("/UseCMap /Identity-H def")
+        expect(map.wmode).to eq(0)
+      end
+    end
+
+    context "cmap with an explicit WMode that overrides UseCMap" do
+      it "uses the explicit WMode" do
+        map = cmap_with_header("/UseCMap /Identity-V def\n/WMode 0 def")
+        expect(map.wmode).to eq(0)
+      end
+    end
+
+    context "cmap with a WMode and character mappings" do
+      it "still loads the character mappings" do
+        map = cmap_with_header("/WMode 1 def")
+        expect(map.decode(0x1)).to eq([0x41])
+      end
+    end
+  end
 end

@@ -368,8 +368,11 @@ class PDF::Reader
       # word_boundary - a boolean indicating if a word boundary was just
       #                 reached. Depending on the current state extra space
       #                 may need to be added
+      # w1 - the vertical displacement of the glyph in *text space*. Only used
+      #      when the current font uses vertical writing mode (WMode 1), see
+      #      Section 9.7.4.3, PDF 32000-1:2008, pp 271
       #
-      def process_glyph_displacement(w0, tj, word_boundary)
+      def process_glyph_displacement(w0, tj, word_boundary, w1 = 0)
         fs = state[:text_font_size]
         tc = state[:char_spacing]
         if word_boundary
@@ -378,18 +381,34 @@ class PDF::Reader
           tw = 0
         end
         th = state[:h_scaling]
-        # optimise the common path to reduce Float allocations
-        if th == 1 && tj == 0 && tc == 0 && tw == 0
-          tx = w0 * fs
-        elsif tj != 0
-          # don't apply spacing to TJ displacement
-          tx = (w0 - (tj/1000.0)) * fs * th
+        font = current_font
+        if font && font.vertical?
+          # Vertical writing mode (WMode 1): the displacement is applied to
+          # the y axis and the horizontal scaling parameter (Th) does not
+          # apply. See Section 9.4.4, PDF 32000-1:2008, pp 252
+          if tj == 0 && tc == 0 && tw == 0
+            ty = w1 * fs
+          elsif tj != 0
+            # don't apply spacing to TJ displacement
+            ty = (w1 - (tj/1000.0)) * fs
+          else
+            # apply spacing values but not horizontal scaling
+            ty = (w1 * fs) + tc + tw
+          end
+          tx = 0
         else
-          # apply horizontal scaling to spacing values but not font size
-          tx = ((w0 * fs) + tc + tw) * th
+          # optimise the common path to reduce Float allocations
+          if th == 1 && tj == 0 && tc == 0 && tw == 0
+            tx = w0 * fs
+          elsif tj != 0
+            # don't apply spacing to TJ displacement
+            tx = (w0 - (tj/1000.0)) * fs * th
+          else
+            # apply horizontal scaling to spacing values but not font size
+            tx = ((w0 * fs) + tc + tw) * th
+          end
+          ty = 0
         end
-        # TODO: support ty > 0
-        ty = 0
         @text_matrix.prepend_translation!(tx, ty)
         @text_rendering_matrix = nil # invalidate cached value
         # we used to invalidate @font_size here too, but it's not required

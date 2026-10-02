@@ -26,6 +26,20 @@ class PDF::Reader
           0
         end
       end
+
+      # delegate the vertical displacement lookup to the descendant CID-keyed
+      # font, see glyph_width for the horizontal equivalent
+      #
+      #: (Integer?) -> Numeric
+      def glyph_vertical_displacement(code_point)
+        return 0 if code_point.nil? || code_point < 0
+
+        if descendant_font = @font.descendantfonts.first
+          descendant_font.glyph_vertical_displacement(code_point).to_f
+        else
+          0
+        end
+      end
     end
   end
 end

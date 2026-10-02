@@ -76,6 +76,12 @@ class PDF::Reader
     #: Numeric
     attr_reader :cid_default_width
 
+    #: Array[Numeric]
+    attr_reader :cid_vmetrics
+
+    #: Array[Numeric]
+    attr_reader :cid_default_vmetrics
+
     #: (PDF::Reader::ObjectHash, Hash[Symbol, untyped]) -> void
     def initialize(ohash, obj)
       @ohash = ohash
@@ -88,8 +94,12 @@ class PDF::Reader
       @font_descriptor = nil #: PDF::Reader::FontDescriptor?
       @cid_widths = [] #: Array[Numeric]
       @cid_default_width = 0 #: Numeric
+      @cid_vmetrics = [] #: Array[Numeric]
+      @cid_default_vmetrics = [] #: Array[Numeric]
+      @wmode = 0 #: Integer
       @encoding = PDF::Reader::Encoding.new(:StandardEncoding) #: PDF::Reader::Encoding
       @cached_widths = {} #: Hash[Integer, Numeric]
+      @cached_vertical_displacements = {} #: Hash[Integer, Numeric]
       @font_matrix = nil #: Array[Numeric] | nil
 
       extract_base_info(obj)
@@ -151,7 +161,68 @@ class PDF::Reader
       end
     end
 
+    # The writing mode of this font: 0 for horizontal writing, 1 for vertical
+    # writing. Determined by the CMap named (or embedded) in the font's
+    # Encoding entry. Only CID-keyed (Type0) fonts can use vertical writing.
+    #
+    #: () -> bool
+    def vertical?
+      @wmode == 1
+    end
+
+    # looks up the specified codepoint and returns the vertical component of
+    # the vertical displacement vector (w1y) in (pdf) glyph space, which is
+    # 1000 glyph units = 1 text space unit. Only meaningful for vertical
+    # (WMode 1) fonts.
+    #
+    #: (Integer | String) -> Numeric
+    def glyph_vertical_displacement(code_point)
+      if code_point.is_a?(String)
+        code_point = unpack_string_to_array_of_ints(code_point, encoding.unpack).first
+        raise MalformedPDFError, "code point missing" if code_point.nil?
+      end
+
+      @cached_vertical_displacements[code_point] ||=
+        @width_calc.glyph_vertical_displacement(code_point)
+    end
+
+    # the vertical component of the vertical displacement vector (w1y),
+    # converted from glyph space to text space
+    #
+    #: (Integer | String) -> Numeric
+    def glyph_vertical_displacement_in_text_space(code_point)
+      if @subtype != :Type0
+        raise UnsupportedFeatureError,
+          "vertical writing mode (WMode 1) is only supported for CID-keyed " \
+          "(Type0) fonts, not #{@subtype}"
+      elsif !vertical?
+        raise UnsupportedFeatureError,
+          "font uses horizontal writing mode (WMode 0), no vertical metrics available"
+      end
+
+      glyph_vertical_displacement(code_point) / 1000.0
+    end
+
     private
+
+    # Determine the writing mode (0 = horizontal, 1 = vertical) from the
+    # font's Encoding entry, which can be a predefined CMap name or an
+    # embedded CMap stream. Predefined CMap names that end in -V are
+    # vertical, see Section 9.7.5.2 PDF 32000-1:2008 pp 273
+    #
+    #: (untyped) -> Integer
+    def extract_wmode(encoding)
+      case encoding
+      when Symbol
+        encoding.to_s.end_with?("-V") ? 1 : 0
+      when PDF::Reader::Stream
+        PDF::Reader::CMap.new(encoding.unfiltered_data).wmode
+      when PDF::Reader::Reference
+        extract_wmode(@ohash.deref(encoding))
+      else
+        0
+      end
+    end
 
     # Only valid for Type3 fonts
     #
@@ -245,6 +316,13 @@ class PDF::Reader
       # the default cid width = 1000, see Section 9.7.4.1 PDF 32000-1:2008 pp 269
       @cid_widths         = @ohash.deref_array(obj[:W])  || []
       @cid_default_width  = @ohash.deref_number(obj[:DW]) || 1000
+
+      # vertical metrics are only relevant for CID Fonts used with a vertical
+      # (WMode 1) CMap. DW2 defaults to [880 -1000], see Section 9.7.4.3
+      # PDF 32000-1:2008 pp 271
+      @cid_vmetrics         = @ohash.deref_array(obj[:W2])  || []
+      @cid_default_vmetrics = @ohash.deref_array(obj[:DW2]) || []
+      @wmode = extract_wmode(obj[:Encoding])
 
       if obj[:ToUnicode]
         # ToUnicode is optional for Type1 and Type3

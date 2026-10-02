@@ -728,4 +728,83 @@ describe PDF::Reader::PageState do
     end
   end
 
+  describe "#process_glyph_displacement with a vertical (WMode 1) font" do
+    let!(:font)   { double(:vertical? => true) }
+    let!(:state)  { PDF::Reader::PageState.new(page) }
+
+    before do
+      allow(state).to receive(:current_font).and_return(font)
+      state.begin_text_object
+      state.set_text_font_and_size(:Test, 24)
+      state.move_text_position(100, 700)
+
+      expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(100, 700))
+      expect(state.trm_transform_point(0,1)).to eq(PDF::Reader::Point.new(100, 724))
+    end
+
+    context "with a vertical displacement of -1 text space units and no spacing" do
+      it "moves the text position down by one font size" do
+        state.process_glyph_displacement(0.5, 0, false, -1.0)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(100, 676))
+        expect(state.trm_transform_point(0,1)).to eq(PDF::Reader::Point.new(100, 700))
+      end
+    end
+
+    context "with a vertical displacement of -0.5 text space units" do
+      it "moves the text position down by half a font size" do
+        state.process_glyph_displacement(0.5, 0, false, -0.5)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(100, 688))
+      end
+    end
+
+    context "with a TJ adjustment" do
+      it "adjusts the position along the vertical axis" do
+        # (-1.0 - 250/1000) * 24 = -30
+        state.process_glyph_displacement(0.5, 250, false, -1.0)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(100, 670))
+      end
+    end
+
+    context "with character spacing" do
+      before do
+        state.set_character_spacing(2)
+      end
+
+      it "applies the spacing along the vertical axis" do
+        # (-1.0 * 24) + 2 = -22
+        state.process_glyph_displacement(0.5, 0, false, -1.0)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(100, 678))
+      end
+    end
+
+    context "with word spacing and a word boundary" do
+      before do
+        state.set_word_spacing(3)
+      end
+
+      it "applies the spacing along the vertical axis" do
+        # (-1.0 * 24) + 3 = -21
+        state.process_glyph_displacement(0.5, 0, true, -1.0)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(100, 679))
+      end
+    end
+
+    context "with horizontal scaling" do
+      before do
+        state.set_horizontal_text_scaling(50)
+      end
+
+      it "does not apply horizontal scaling to the vertical displacement" do
+        state.process_glyph_displacement(0.5, 0, false, -1.0)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(100, 676))
+      end
+    end
+  end
+
 end

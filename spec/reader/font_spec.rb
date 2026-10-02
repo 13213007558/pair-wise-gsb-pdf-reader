@@ -126,4 +126,193 @@ describe PDF::Reader::Font do
     end
   end
 
+  describe "#vertical?" do
+    context "with a Type0 font using the Identity-H encoding" do
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :Type0,
+          :Encoding => :"Identity-H",
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "is horizontal" do
+        expect(font.vertical?).to eq(false)
+      end
+    end
+
+    context "with a Type0 font using the Identity-V encoding" do
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :Type0,
+          :Encoding => :"Identity-V",
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "is vertical" do
+        expect(font.vertical?).to eq(true)
+      end
+    end
+
+    context "with a Type0 font using another predefined vertical CMap name" do
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :Type0,
+          :Encoding => :"UniJIS-UCS2-V",
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "is vertical" do
+        expect(font.vertical?).to eq(true)
+      end
+    end
+
+    context "with a Type0 font using a CMap stream with WMode 1" do
+      let(:cmap_stream) do
+        PDF::Reader::Stream.new(
+          {},
+          <<~CMAP
+            /CIDInit /ProcSet findresource begin
+            12 dict begin
+            begincmap
+            /WMode 1 def
+            1 begincodespacerange
+            <0000> <FFFF>
+            endcodespacerange
+            endcmap
+            CMapName currentdict /CMap defineresource pop
+            end
+            end
+          CMAP
+        )
+      end
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :Type0,
+          :Encoding => cmap_stream,
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "is vertical" do
+        expect(font.vertical?).to eq(true)
+      end
+    end
+
+    context "with a simple font" do
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :Type1,
+          :Encoding => :WinAnsiEncoding,
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "is horizontal" do
+        expect(font.vertical?).to eq(false)
+      end
+    end
+  end
+
+  describe "#glyph_vertical_displacement_in_text_space" do
+    context "with a vertical Type0 font" do
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :Type0,
+          :Encoding => :"Identity-V",
+          :DescendantFonts => [
+            {
+              :Type     => :Font,
+              :Subtype  => :CIDFontType2,
+              :DW       => 1000,
+              :W        => [0, [500, 500, 500, 500]],
+              :DW2      => [880, -1000],
+              :W2       => [1, [-500, 250, 440]],
+            }
+          ],
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "returns the W2 override for a covered glyph" do
+        expect(font.glyph_vertical_displacement_in_text_space(1)).to eq(-0.5)
+      end
+
+      it "returns the DW2 default for other glyphs" do
+        expect(font.glyph_vertical_displacement_in_text_space(2)).to eq(-1.0)
+      end
+    end
+
+    context "with a vertical Type0 font that has no DW2 or W2" do
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :Type0,
+          :Encoding => :"Identity-V",
+          :DescendantFonts => [
+            {
+              :Type     => :Font,
+              :Subtype  => :CIDFontType2,
+              :DW       => 1000,
+            }
+          ],
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "returns the spec default vertical displacement" do
+        expect(font.glyph_vertical_displacement_in_text_space(1)).to eq(-1.0)
+      end
+    end
+
+    context "with a horizontal Type0 font" do
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :Type0,
+          :Encoding => :"Identity-H",
+          :DescendantFonts => [
+            {
+              :Type     => :Font,
+              :Subtype  => :CIDFontType2,
+              :DW       => 1000,
+            }
+          ],
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "raises an error rather than silently using horizontal metrics" do
+        expect {
+          font.glyph_vertical_displacement_in_text_space(1)
+        }.to raise_error(PDF::Reader::UnsupportedFeatureError)
+      end
+    end
+
+    context "with a simple (non CID-keyed) font using a vertical CMap" do
+      let(:raw) do
+        {
+          :Type     => :Font,
+          :Subtype  => :TrueType,
+          :Encoding => :"Identity-V",
+        }
+      end
+      let(:font) { PDF::Reader::Font.new(object_hash, raw) }
+
+      it "raises an error rather than silently falling back to horizontal metrics" do
+        expect {
+          font.glyph_vertical_displacement_in_text_space(1)
+        }.to raise_error(PDF::Reader::UnsupportedFeatureError)
+      end
+    end
+  end
+
 end

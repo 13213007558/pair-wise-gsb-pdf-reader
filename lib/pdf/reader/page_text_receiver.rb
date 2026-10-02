@@ -186,7 +186,12 @@ module PDF
           unless utf8_chars == SPACE
             @characters << TextRun.new(text_origin.x, text_origin.y, scaled_glyph_width, @state.font_size, utf8_chars)
           end
-          @state.process_glyph_displacement(glyph_width, 0, utf8_chars == SPACE)
+          if @state.current_font.vertical?
+            glyph_height = @state.current_font.glyph_vertical_displacement_in_text_space(glyph_code)
+            @state.process_glyph_displacement(glyph_width, 0, utf8_chars == SPACE, glyph_height)
+          else
+            @state.process_glyph_displacement(glyph_width, 0, utf8_chars == SPACE)
+          end
         end
       end
 

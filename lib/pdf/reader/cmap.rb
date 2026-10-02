@@ -58,6 +58,8 @@ class PDF::Reader
     #: (String) -> void
     def initialize(data)
       @map = {} #: Hash[Integer, Array[Integer]]
+      @wmode = 0 #: Integer
+      @wmode_explicit = false #: bool
       process_data(data)
     end
 
@@ -65,6 +67,13 @@ class PDF::Reader
     def size
       @map.size
     end
+
+    # The writing mode declared by this CMap: 0 for horizontal writing,
+    # 1 for vertical writing. CMaps that don't declare a WMode of their
+    # own inherit it from the CMap named by their UseCMap entry.
+    #
+    #: () -> Integer
+    attr_reader :wmode
 
     # Convert a glyph code into one or more Codepoints.
     #
@@ -84,7 +93,11 @@ class PDF::Reader
       instructions = []
 
       while token = parser.parse_token
-        if token.is_a?(String) || token.is_a?(Array)
+        if token == :WMode
+          process_wmode_instruction(parser)
+        elsif token == :UseCMap
+          process_usecmap_instruction(parser)
+        elsif token.is_a?(String) || token.is_a?(Array)
           if token == "beginbfchar"
             mode = :char
           elsif token == "endbfchar"
@@ -106,6 +119,22 @@ class PDF::Reader
       end
     end
 
+    #: (PDF::Reader::Parser) -> void
+    def process_wmode_instruction(parser)
+      value = parser.parse_token
+      if value.is_a?(Numeric)
+        @wmode = value.to_i
+        @wmode_explicit = true
+      end
+    end
+
+    #: (PDF::Reader::Parser) -> void
+    def process_usecmap_instruction(parser)
+      name = parser.parse_token
+      if !@wmode_explicit && name.is_a?(Symbol) && name.to_s.end_with?("-V")
+        @wmode = 1
+      end
+    end
 
     #: (String) -> PDF::Reader::Parser
     def build_parser(instructions)
