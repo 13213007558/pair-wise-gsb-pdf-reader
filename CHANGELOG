@@ -1,3 +1,6 @@
+vUnreleased
+- Support vertical CID fonts (WMode 1): parse DW2/W2 metrics, position glyphs using the position vector, apply the vertical displacement (including TJ adjustments), and expose wmode/advance on extracted TextRun objects. Unsupported named CMaps on Type0 fonts raise UnsupportedFeatureError instead of silently falling back to horizontal layout
+
 v2.16.0 (9th August 2026)
 - Add new method that use Point(x, y) instead of Array[Integer], for improved typing with sorbet (https://github.com/yob/pdf-reader/pull/578)
 - Support extracting text via ActualText annotations (https://github.com/yob/pdf-reader/pull/587)

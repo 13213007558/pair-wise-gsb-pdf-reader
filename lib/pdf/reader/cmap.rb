@@ -55,9 +55,16 @@ class PDF::Reader
     #: Hash[Integer, Array[Integer]]
     attr_reader :map
 
+    # 0 for horizontal writing, 1 for vertical writing. Defaults to 0 when
+    # the CMap stream doesn't contain a WMode entry.
+    #
+    #: Integer
+    attr_reader :wmode
+
     #: (String) -> void
     def initialize(data)
       @map = {} #: Hash[Integer, Array[Integer]]
+      @wmode = 0 #: Integer
       process_data(data)
     end
 
@@ -102,6 +109,10 @@ class PDF::Reader
           elsif mode == :range
             instructions << token
           end
+        elsif token == :WMode
+          # followed by the writing mode number, e.g. "/WMode 1 def"
+          value = parser.parse_token
+          @wmode = value.to_i if value.is_a?(Numeric)
         end
       end
     end

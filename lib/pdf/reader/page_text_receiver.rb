@@ -49,6 +49,7 @@ module PDF
         @page = page
         @content = []
         @characters = []
+        @pre_adjust_position = nil
         @actual_text = nil
         @actual_text_consumed = false
       end
@@ -97,6 +98,7 @@ module PDF
       #####################################################
       # record text that is drawn on the page
       def show_text(string) # Tj (AWAY)
+        @pre_adjust_position = nil
         internal_show_text(string)
       end
 
@@ -105,7 +107,13 @@ module PDF
           if arg.is_a?(String)
             internal_show_text(arg)
           elsif arg.is_a?(Numeric)
-            @state.process_glyph_displacement(0, arg, false)
+            vertical = @state.current_font&.vertical? || false
+            if vertical
+              # attribute the adjustment to the preceding glyph; if there is
+              # no preceding glyph yet it's absorbed into the first one
+              @pre_adjust_position ||= @state.trm_transform_point(Point::ZERO_ZERO)
+            end
+            @state.process_glyph_displacement(0, arg, false, vertical)
           else
             # skip it
           end
@@ -113,6 +121,7 @@ module PDF
       end
 
       def move_to_next_line_and_show_text(str) # '
+        @pre_adjust_position = nil
         @state.move_to_start_of_next_line
         show_text(str)
       end
@@ -120,6 +129,7 @@ module PDF
       def set_spacing_next_line_show_text(aw, ac, string) # "
         @state.set_word_spacing(aw)
         @state.set_character_spacing(ac)
+        @pre_adjust_position = nil
         move_to_next_line_and_show_text(string)
       end
 
@@ -160,10 +170,6 @@ module PDF
         end
         glyphs = @state.current_font.unpack(string)
         glyphs.each_with_index do |glyph_code, index|
-          # paint the current glyph
-          bl = @state.trm_transform_point(Point::ZERO_ZERO)
-          text_origin = apply_rotation(bl)
-
           utf8_chars = @state.current_font.to_utf8(glyph_code)
 
           # Use ActualText from marked content if available (PDF 32000-1 §14.9.4).
@@ -178,16 +184,86 @@ module PDF
             end
           end
 
-          # apply to glyph displacment for the current glyph so the next
-          # glyph will appear in the correct position
-          glyph_width = @state.current_font.glyph_width_in_text_space(glyph_code)
-          th = 1
-          scaled_glyph_width = glyph_width * @state.font_size * th
-          unless utf8_chars == SPACE
-            @characters << TextRun.new(text_origin.x, text_origin.y, scaled_glyph_width, @state.font_size, utf8_chars)
+          if @state.current_font.vertical?
+            show_vertical_glyph(glyph_code, utf8_chars)
+          else
+            show_horizontal_glyph(glyph_code, utf8_chars)
           end
-          @state.process_glyph_displacement(glyph_width, 0, utf8_chars == SPACE)
         end
+      end
+
+      #: () -> void
+      def show_horizontal_glyph(glyph_code, utf8_chars)
+        bl = @state.trm_transform_point(Point::ZERO_ZERO)
+        text_origin = apply_rotation(bl)
+
+        glyph_width = @state.current_font.glyph_width_in_text_space(glyph_code)
+        scaled_glyph_width = glyph_width * @state.font_size
+        unless utf8_chars == SPACE
+          @characters << TextRun.new(
+            text_origin.x, text_origin.y, scaled_glyph_width, @state.font_size, utf8_chars
+          )
+        end
+        @state.process_glyph_displacement(glyph_width, 0, utf8_chars == SPACE)
+      end
+
+      # For vertical writing the glyph's origin is shifted from the current
+      # text position by the position vector (w10, 0), and the advance to the
+      # next glyph follows the displacement vector (0, w11). See
+      # Section 9.4.4/9.7.4.3, PDF 32000-1:2008.
+      #
+      #: (Integer, String) -> void
+      def show_vertical_glyph(glyph_code, utf8_chars)
+        if utf8_chars == SPACE
+          # spaces are skipped, but still consume the vertical advance
+          _, displacement_y, _ = @state.current_font.glyph_vertical_metrics_in_text_space(glyph_code)
+          @pre_adjust_position = nil
+          @state.process_glyph_displacement(displacement_y, 0, false, true)
+          return
+        end
+
+        position_x, displacement_y, displacement_x =
+          @state.current_font.glyph_vertical_metrics_in_text_space(glyph_code)
+
+        glyph_point = Point.new(position_x, 0)
+        bl = @state.trm_transform_point(glyph_point)
+        text_origin = apply_rotation(bl)
+        text_position_before = @state.trm_transform_point(Point::ZERO_ZERO)
+
+        if @pre_adjust_position && @characters.last
+          # A TJ number applied after the preceding glyph moved the text
+          # position before this glyph started. Attribute that movement to
+          # the preceding glyph's measured advance.
+          @characters.last.extend_vertical_advance(
+            @pre_adjust_position.y - text_position_before.y
+          )
+        end
+
+        @pre_adjust_position = nil
+
+        # displacement_x is normally 0 in vertical text
+        if displacement_x != 0
+          @state.process_horizontal_displacement_only(displacement_x)
+        end
+        @state.process_glyph_displacement(displacement_y, 0, false, true)
+
+        text_position_after = @state.trm_transform_point(Point::ZERO_ZERO)
+        # the glyph's own vertical advance (any TJ number before this glyph
+        # is accounted for in the preceding glyph instead)
+        advance = (text_position_before.y - text_position_after.y).abs
+
+        # the glyph's horizontal ink width comes from the regular W/DW metrics
+        scaled_ink_width = @state.current_font.glyph_width_in_text_space(glyph_code) * @state.font_size
+
+        run = TextRun.new(
+          text_origin.x, text_origin.y, scaled_ink_width, @state.font_size, utf8_chars,
+          wmode: 1, advance: advance
+        )
+        rotated_after = apply_rotation(text_position_after)
+        run.page_rotate = @page.rotate.to_i
+        run.next_nominal_y = rotated_after.y
+        run.next_nominal_x = rotated_after.x
+        @characters << run
       end
 
       #: (Point) -> Point
@@ -208,12 +284,37 @@ module PDF
       #
       #: (Array[PDF::Reader::TextRun]) -> Array[PDF::Reader::TextRun]
       def merge_runs(runs)
-        runs.group_by { |char|
+        horizontal, vertical = runs.partition { |run| !run.vertical? }
+
+        merged_horizontal = horizontal.group_by { |char|
           char.y.to_i
-        }.map { |y, chars|
+        }.map { |_y, chars|
           group_chars_into_runs(chars.sort)
-        }.flatten.sort
+        }.flatten
+
+        merged_vertical = sort_vertical(vertical).slice_when { |a, b|
+          !a.mergable?(b)
+        }.map { |column| group_chars_into_runs(column) }.flatten
+
+        (merged_horizontal + merged_vertical).sort
       end
+
+      # vertical runs are read top to bottom (highest y first, or lowest x
+      # first when the page is rotated 90/270)
+      #
+      #: (Array[PDF::Reader::TextRun]) -> Array[PDF::Reader::TextRun]
+      def sort_vertical(chars)
+        if @page.rotate == 90
+          chars.sort { |a, b| b.x <=> a.x }
+        elsif @page.rotate == 180
+          chars.sort { |a, b| a.y <=> b.y }
+        elsif @page.rotate == 270
+          chars.sort { |a, b| a.x <=> b.x }
+        else
+          chars.sort { |a, b| b.y <=> a.y }
+        end
+      end
+
 
       def group_chars_into_runs(chars)
         chars.each_with_object([]) do |char, runs|

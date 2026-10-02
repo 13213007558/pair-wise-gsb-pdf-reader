@@ -726,6 +726,45 @@ describe PDF::Reader::PageState do
         end
       end
     end
+
+    context "with vertical writing (WMode 1)" do
+      let!(:state)  {PDF::Reader::PageState.new(page) }
+
+      before do
+        state.begin_text_object
+        state.set_text_font_and_size(:Test, 12)
+        state.move_text_position(40, 700)
+      end
+
+      it "advances along the y axis and leaves x unchanged" do
+        state.process_glyph_displacement(-1.0, 0, false, true)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(40, 688))
+        expect(state.trm_transform_point(1,0)).to eq(PDF::Reader::Point.new(52, 688))
+      end
+
+      it "applies the TJ number to the vertical advance using (w1 - tj/1000)*Tfs" do
+        # w1 = -1.0 text units, tj = -200: ty = (-1.0 - (-0.2)) * 12 = -9.6
+        state.process_glyph_displacement(-1.0, -200, false, true)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(40, 690.4))
+      end
+
+      it "ignores character and word spacing in vertical mode" do
+        state.set_character_spacing(1)
+        state.set_word_spacing(2)
+        state.process_glyph_displacement(-1.0, 0, true, true)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(40, 688))
+      end
+
+      it "moves along y for a standalone TJ adjustment" do
+        # ty = (0 - (-200)/1000) * 12 = 2.4 upward
+        state.process_glyph_displacement(0, -200, false, true)
+
+        expect(state.trm_transform_point(0,0)).to eq(PDF::Reader::Point.new(40, 702.4))
+      end
+    end
   end
 
 end

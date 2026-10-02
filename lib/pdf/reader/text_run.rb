@@ -10,6 +10,37 @@ class PDF::Reader
     #: Numeric
     attr_reader :width
 
+    # 0 for horizontal writing, 1 for vertical writing (CIDFont WMode).
+    #
+    #: Integer
+    attr_reader :wmode
+
+    # The advance along the writing direction after the last glyph. For
+    # horizontal runs this is always equal to #width; for vertical runs it's
+    # the vertical distance (always stored as a positive number) between the
+    # origin of the last glyph and where a following glyph would begin.
+    #
+    #: Numeric
+    attr_reader :advance
+
+    # For vertical runs: the y where the next glyph begins after this run's
+    # nominal displacement (excluding standalone TJ adjustments), used to
+    # decide if two runs are contiguous. nil for horizontal runs.
+    #
+    #: Numeric?
+    attr_accessor :next_nominal_y
+
+    # For vertical runs on a page rotated 90/270: the x where the next glyph
+    # begins after this run's nominal displacement. nil otherwise.
+    #
+    #: Numeric?
+    attr_accessor :next_nominal_x
+
+    # Page rotation in degrees, used to orient vertical merge calculations.
+    #
+    #: Integer
+    attr_accessor :page_rotate
+
     #: Numeric
     attr_reader :font_size
 
@@ -18,13 +49,15 @@ class PDF::Reader
 
     alias :to_s :text
 
-    #: (Numeric, Numeric, Numeric, Numeric, String) -> void
-    def initialize(x, y, width, font_size, text)
+    #: (Numeric, Numeric, Numeric, Numeric, String, ?wmode: Integer, ?advance: Numeric) -> void
+    def initialize(x, y, width, font_size, text, wmode: 0, advance: width)
       @x = x #: Numeric
       @y = y #: Numeric
       @width = width
       @font_size = font_size
       @text = text
+      @wmode = wmode
+      @advance = advance
       @origin = nil #: PDF::Reader::Point | nil
       @endx = nil #: Numeric | nil
       @endy = nil #: Numeric | nil
@@ -83,18 +116,47 @@ class PDF::Reader
 
     #: (PDF::Reader::TextRun) -> bool
     def mergable?(other)
-      y.to_i == other.y.to_i && font_size == other.font_size && mergable_range.include?(other.x)
+      if vertical?
+        other.wmode == wmode && font_size == other.font_size &&
+          vertical_aligned?(other) &&
+          vertical_mergable_range.include?(vertical_other_position(other))
+      else
+        y.to_i == other.y.to_i && font_size == other.font_size &&
+          other.wmode == wmode && mergable_range.include?(other.x)
+      end
     end
 
     #: (PDF::Reader::TextRun) -> PDF::Reader::TextRun
     def +(other)
       raise ArgumentError, "#{other} cannot be merged with this run" unless mergable?(other)
 
-      if (other.x - endx) <( font_size * 0.2)
+      if vertical?
+        merge_vertical(other)
+      elsif (other.x - endx) <( font_size * 0.2)
         TextRun.new(x, y, other.endx - x, font_size, text + other.text)
       else
         TextRun.new(x, y, other.endx - x, font_size, "#{text} #{other.text}")
       end
+    end
+
+    # Two vertical runs are concatenated in reading order (top to bottom).
+    # The receiver may be either the upper or lower run.
+    #
+    #: (PDF::Reader::TextRun) -> PDF::Reader::TextRun
+    def merge_vertical(other)
+      upper, lower = vertical_upper_lower(other)
+      gap = vertical_gap(upper, lower)
+      separator = gap <= font_size * 0.2 ? "" : "\n"
+      merged = TextRun.new(
+        upper.x, upper.y, upper.width, font_size,
+        "#{upper.text}#{separator}#{lower.text}",
+        wmode: 1,
+        advance: lower.advance
+      )
+      merged.page_rotate = page_rotate
+      merged.next_nominal_y = lower.next_nominal_y
+      merged.next_nominal_x = lower.next_nominal_x
+      merged
     end
 
     #: () -> String
@@ -106,6 +168,21 @@ class PDF::Reader
     def intersect?(other_run)
       x <= other_run.endx && endx >= other_run.x &&
         endy >= other_run.y && y <= other_run.endy
+    end
+
+    #: () -> bool
+    def vertical?
+      @wmode == 1
+    end
+
+    # Add a signed delta (in unrotated user space) to this vertical run's
+    # advance. A positive +delta+ lengthens the advance (moves the following
+    # glyph further down).
+    #
+    #: (Numeric) -> void
+    def extend_vertical_advance(delta)
+      @advance = (@advance - delta).abs
+      @mergable_range = nil
     end
 
     # return what percentage of this text run is overlapped by another run
@@ -130,6 +207,59 @@ class PDF::Reader
     #: () -> Range[Numeric]
     def mergable_range
       @mergable_range ||= Range.new(endx - 3, endx + font_size)
+    end
+
+    #: () -> Range[Numeric]
+    def vertical_mergable_range
+      if page_rotate == 90
+        target = next_nominal_x || (x - advance)
+        Range.new(target - 3, target + 3)
+      elsif page_rotate == 270
+        target = next_nominal_x || (x + advance)
+        Range.new(target - 3, target + 3)
+      elsif page_rotate == 180
+        target = next_nominal_y || (y + advance)
+        Range.new(target - 3, target + 3)
+      else
+        target = next_nominal_y || (y - advance)
+        Range.new(target - 3, target + 3)
+      end
+    end
+
+    #: (PDF::Reader::TextRun) -> bool
+    def vertical_aligned?(other)
+      if page_rotate == 90 || page_rotate == 270
+        (y - other.y).abs <= 3
+      else
+        (x - other.x).abs <= 3
+      end
+    end
+
+    #: (PDF::Reader::TextRun) -> Numeric
+    def vertical_other_position(other)
+      page_rotate == 90 || page_rotate == 270 ? other.x : other.y
+    end
+
+    # Returns [upper (read first), lower (read second)]
+    #
+    #: (PDF::Reader::TextRun) -> [PDF::Reader::TextRun, PDF::Reader::TextRun]
+    def vertical_upper_lower(other)
+      case page_rotate
+      when 90  then x >= other.x ? [self, other] : [other, self]
+      when 270 then x <= other.x ? [self, other] : [other, self]
+      when 180 then y <= other.y ? [self, other] : [other, self]
+      else          y >= other.y ? [self, other] : [other, self]
+      end
+    end
+
+    #: (PDF::Reader::TextRun, PDF::Reader::TextRun) -> Numeric
+    def vertical_gap(upper, lower)
+      case page_rotate
+      when 90  then upper.x - lower.x
+      when 270 then lower.x - upper.x
+      when 180 then lower.y - upper.y
+      else          upper.y - lower.y
+      end
     end
 
     # Assume string encoding is marked correctly and we can trust String#size to return a

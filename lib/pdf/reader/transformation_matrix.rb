@@ -82,10 +82,6 @@ class PDF::Reader
     # NOTE: The if statements in this method are ordered to prefer optimisations
     #       that allocate fewer objects
     #
-    # TODO: it might be worth adding an optimised path for vertical
-    #       displacement to speed up processing documents that use vertical
-    #       writing systems
-    #
     #: (Numeric, Numeric, Numeric, Numeric, Numeric, Numeric) -> PDF::Reader::TransformationMatrix
     def multiply!(a,b,c, d,e,f)
       if a == 1 && b == 0 && c == 0 && d == 1 && e == 0 && f == 0

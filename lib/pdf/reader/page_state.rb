@@ -361,7 +361,8 @@ class PDF::Reader
       #
       # w0 - the glyph width in *text space*. This generally means the width
       #      in glyph space should be divded by 1000 before being passed to
-      #      this function
+      #      this function. For vertical writing this is the y component of
+      #      the displacement vector (w11, typically negative).
       # tj - any kerning that should be applied to the text matrix before the
       #      following glyph is painted. This is usually the numeric arguments
       #      in the array passed to a TJ operator
@@ -369,7 +370,11 @@ class PDF::Reader
       #                 reached. Depending on the current state extra space
       #                 may need to be added
       #
-      def process_glyph_displacement(w0, tj, word_boundary)
+      # vertical - when true the advance is along the y axis (CIDFont
+      #            WMode 1) and no word/character spacing or horizontal
+      #            scaling is applied, per Section 9.4.4.
+      #
+      def process_glyph_displacement(w0, tj, word_boundary, vertical = false)
         fs = state[:text_font_size]
         tc = state[:char_spacing]
         if word_boundary
@@ -378,6 +383,19 @@ class PDF::Reader
           tw = 0
         end
         th = state[:h_scaling]
+        if vertical
+          # Section 9.4.4, vertical text:
+          #   tx = 0, ty = (w1 - tj/1000) * Tfs
+          # character spacing, word spacing and Th don't apply
+          if tj == 0
+            ty = w0 * fs
+          else
+            ty = (w0 - (tj / 1000.0)) * fs
+          end
+          @text_matrix.prepend_translation!(0, ty)
+          @text_rendering_matrix = nil
+          return
+        end
         # optimise the common path to reduce Float allocations
         if th == 1 && tj == 0 && tc == 0 && tw == 0
           tx = w0 * fs
@@ -395,6 +413,16 @@ class PDF::Reader
         # we used to invalidate @font_size here too, but it's not required
         # font_size depends only on trm.b/trm.d (scale/rotation), not trm.e/f (translation),
         # so it remains valid after a glyph displacement and does not need invalidation
+      end
+
+      # Apply a text-space horizontal offset without affecting the vertical
+      # advance. Used for the (rare) non-zero tx component of a vertical CID
+      # font's displacement vector.
+      #
+      #: (Numeric) -> void
+      def process_horizontal_displacement_only(tx)
+        @text_matrix.prepend_translation!(tx, 0)
+        @text_rendering_matrix = nil
       end
 
       private
