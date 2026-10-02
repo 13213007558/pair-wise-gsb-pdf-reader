@@ -1,3 +1,7 @@
+vUnreleased
+- Add PDF::Reader#files for listing every embedded file entry point (EmbeddedFiles name tree and /AF associations on the catalog, pages, file attachment annotations and form xobjects), with name, scope and AFRelationship preserved for each entry
+- Add PDF::Reader#read_embedded_file and PDF::Reader::FileAssociation#read, returning an explicit status result; external paths are not followed and unknown filters are reported rather than executed or raised
+
 v2.16.0 (9th August 2026)
 - Add new method that use Point(x, y) instead of Array[Integer], for improved typing with sorbet (https://github.com/yob/pdf-reader/pull/578)
 - Support extracting text via ActualText annotations (https://github.com/yob/pdf-reader/pull/587)

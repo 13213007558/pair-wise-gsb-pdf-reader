@@ -232,11 +232,50 @@ module PDF
       PDF::Reader::Page.new(@objects, num, :cache => @cache)
     end
 
+    # List every embedded file entry point in the PDF as an Array of
+    # PDF::Reader::FileAssociation objects. This unifies entries found in the
+    # catalog's EmbeddedFiles name tree with associated files (AF) attached to
+    # the document catalog, pages, file attachment annotations and form
+    # xobjects.
+    #
+    # Duplicate names and shared embedded streams are retained - each entry
+    # keeps its own name, scope and AFRelationship. Use FileAssociation#read or
+    # #read_embedded_file to obtain decoded bytes; the PDF's advertised file
+    # name is never used as an extraction path.
+    #
+    #   reader.files.each do |entry|
+    #     result = entry.read
+    #     next unless result.ok?
+    #     File.write(caller_chosen_path, result.data, mode: "wb")
+    #   end
+    #
+    #: () -> Array[PDF::Reader::FileAssociation]
+    def files
+      file_collector.files
+    end
+    alias :embedded_files :files
+    alias :attachments :files
+
+    # Read embedded file content by identity (a FileAssociation, FileSpec,
+    # EmbeddedFile, or a Reference to any of them). Returns a
+    # PDF::Reader::EmbeddedFileReadResult with an explicit status; external file
+    # paths are not followed and unknown filters are reported without raising.
+    #
+    #: (untyped) -> PDF::Reader::EmbeddedFileReadResult
+    def read_embedded_file(identity)
+      file_collector.read(identity)
+    end
+
     private
 
     #: () -> Hash[Symbol, untyped]
     def root
       @root ||= @objects.deref_hash(@objects.trailer[:Root]) || {}
+    end
+
+    #: () -> PDF::Reader::FileCollector
+    def file_collector
+      @file_collector ||= PDF::Reader::FileCollector.new(@objects)
     end
 
   end
@@ -252,6 +291,10 @@ require 'pdf/reader/cmap'
 require 'pdf/reader/encoding'
 require 'pdf/reader/encoding_utils'
 require 'pdf/reader/error'
+require 'pdf/reader/filespec'
+require 'pdf/reader/name_tree'
+require 'pdf/reader/file_association'
+require 'pdf/reader/file_collector'
 require 'pdf/reader/filter'
 require 'pdf/reader/filter/ascii85'
 require 'pdf/reader/filter/ascii_hex'

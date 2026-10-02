@@ -193,6 +193,16 @@ module PDF
         }.join(" ")
       end
 
+      # List the embedded files associated with this page as
+      # PDF::Reader::FileAssociation objects - the page dictionary's /AF array,
+      # file attachment annotations on the page, and /AF entries on form
+      # xobjects reachable from the page's resources.
+      #
+      #: () -> Array[PDF::Reader::FileAssociation]
+      def files
+        PDF::Reader::FileCollector.new(objects).files_for_page(@pagenum)
+      end
+
       # returns the angle to rotate the page clockwise. Always 0, 90, 180 or 270
       #
       #: () -> Integer

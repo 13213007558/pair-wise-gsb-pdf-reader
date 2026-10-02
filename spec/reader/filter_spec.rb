@@ -3,6 +3,22 @@
 
 describe PDF::Reader::Filter do
 
+  describe ".supported?" do
+    it "recognises filters the library can fully decode" do
+      expect(PDF::Reader::Filter.supported?(:FlateDecode)).to eq(true)
+      expect(PDF::Reader::Filter.supported?(:ASCIIHexDecode)).to eq(true)
+      expect(PDF::Reader::Filter.supported?(:ASCII85Decode)).to eq(true)
+      expect(PDF::Reader::Filter.supported?(:LZWDecode)).to eq(true)
+      expect(PDF::Reader::Filter.supported?(:RunLengthDecode)).to eq(true)
+    end
+
+    it "does not claim support for image-only or unknown filters" do
+      expect(PDF::Reader::Filter.supported?(:DCTDecode)).to eq(false)
+      expect(PDF::Reader::Filter.supported?(:CCITTFaxDecode)).to eq(false)
+      expect(PDF::Reader::Filter.supported?(:FantasyDecode)).to eq(false)
+    end
+  end
+
   describe "#with" do
     context "when passed :ASCII85Decode" do
       it "returns the appropriate class" do

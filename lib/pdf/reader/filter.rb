@@ -35,6 +35,29 @@ class PDF::Reader
   #
   module Filter # :nodoc:
 
+    # Filters PDF::Reader knows how to fully decode. Image-only filters are accepted
+    # by #with but return the data untouched, so they're intentionally excluded.
+    DECODABLE_FILTERS = [
+      :ASCII85Decode,
+      :A85,
+      :ASCIIHexDecode,
+      :AHx,
+      :FlateDecode,
+      :Fl,
+      :LZWDecode,
+      :LZW,
+      :RunLengthDecode,
+      :RL,
+    ].freeze #: Array[Symbol]
+
+    # return true if the named filter is supported by this library. The filter name
+    # may be provided as a PDF Name (Symbol), as produced by the PDF parser.
+    #
+    #: (untyped) -> bool
+    def self.supported?(name)
+      DECODABLE_FILTERS.include?(name)
+    end
+
     ################################################################################
     # creates a new filter for decoding content.
     #

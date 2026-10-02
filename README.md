@@ -97,6 +97,62 @@ reader  = PDF::Reader.new("somefile.pdf")
 puts reader.objects.inspect
 ```
 
+# Embedded Files
+
+PDF files can carry attachments in two different ways - through the
+EmbeddedFiles name tree in the document catalog, and through associated file
+(/AF) entries on the catalog, pages, file attachment annotations and form
+xobjects. `reader.files` unifies every entry point and returns an array of
+`PDF::Reader::FileAssociation` objects, each describing where it was found,
+the name it was registered with and its `/AFRelationship`:
+
+```ruby
+reader = PDF::Reader.new('somefile.pdf')
+
+reader.files.each do |entry|
+  puts entry.scope        # :name_tree, :document, :page, :annotation or :xobject
+  puts entry.name         # name tree key (nil for AF/annotation entries)
+  puts entry.file_name    # /UF preferred over /F, decoded to UTF-8
+  puts entry.relationship # /AFRelationship, e.g. :Data, :Source
+  puts entry.page_number  # 1-indexed page, or nil at document scope
+end
+```
+
+Duplicate names and filespecs that share a single embedded stream are all
+retained - no aliases are collapsed.
+
+Extraction is always left to the caller; the PDF advertised file name is
+never used as a path. Read the bytes through an entry, a filespec, an embedded
+stream, or a reference to any of them. The result reports an explicit status,
+so external paths are never followed and unknown filters do not raise:
+
+```ruby
+result = entry.read
+# or: reader.read_embedded_file(entry.filespec.embedded)
+if result.ok?
+  File.write(destination_you_chose, result.data, mode: 'wb')
+elsif result.unsupported_filter?
+  warn %(can't decode #{result.filter})
+elsif result.external?
+  warn 'entry points outside the PDF and was not followed'
+end
+```
+
+The underlying `PDF::Reader::FileSpec` exposes every alias (`/F`, `/UF`,
+`/DOS`, `/Mac`, `/Unix`) and its matching `/EF` streams. Each embedded stream
+exposes its filters and `/Params` (`Size`, `CheckSum`, dates) for
+verification:
+
+```ruby
+spec = entry.filespec
+spec.names            # { F: ..., UF: ..., DOS: ..., ... }
+spec.embedded_files   # { DOS: #<EmbeddedFile>, Mac: #<EmbeddedFile> }
+spec.embedded.size          # advertised uncompressed size
+spec.embedded.checksum_hex  # advertised MD5, as hex
+```
+
+Page scoped access is available with `reader.page(1).files`.
+
 # Text Encoding
 
 Regardless of the internal encoding used in the PDF all text will be converted
