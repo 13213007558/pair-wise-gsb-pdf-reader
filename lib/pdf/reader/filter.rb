@@ -46,7 +46,7 @@ class PDF::Reader
       case name
       when :ASCII85Decode, :A85   then PDF::Reader::Filter::Ascii85.new(options)
       when :ASCIIHexDecode, :AHx  then PDF::Reader::Filter::AsciiHex.new(options)
-      when :CCITTFaxDecode, :CCF  then PDF::Reader::Filter::Null.new(options)
+      when :CCITTFaxDecode, :CCF  then PDF::Reader::Filter::CcittFax.new(options)
       when :DCTDecode, :DCT       then PDF::Reader::Filter::Null.new(options)
       when :FlateDecode, :Fl      then PDF::Reader::Filter::Flate.new(options)
       when :JBIG2Decode           then PDF::Reader::Filter::Null.new(options)
