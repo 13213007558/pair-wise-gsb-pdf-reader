@@ -101,8 +101,13 @@ module PDF
       #
       #: () -> Hash[Symbol, PDF::Reader::Stream]
       def xobjects
-        dict = @objects.deref_hash!(@resources[:XObject]) || {}
-        TypeCheck.cast_to_pdf_dict_with_stream_values!(dict)
+        dict = @objects.deref_hash(@resources[:XObject]) || {}
+        dereferenced = dict.each_with_object({}) do |(label, value), result|
+          stream = @objects.deref_stream(value)
+          raise MalformedPDFError, "XObject #{label} must be a stream" if stream.nil?
+          result[@objects.deref_name(label)] = stream
+        end
+        TypeCheck.cast_to_pdf_dict_with_stream_values!(dereferenced)
       end
 
     end

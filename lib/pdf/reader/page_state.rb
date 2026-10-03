@@ -203,9 +203,11 @@ class PDF::Reader
           form = PDF::Reader::FormXObject.new(@page, xobject, :cache => @cache)
           @font_stack.unshift(form.font_objects)
           @xobject_stack.unshift(form.xobjects)
+          @cs_stack.unshift(form.color_spaces)
           yield form if block_given?
           @font_stack.shift
           @xobject_stack.shift
+          @cs_stack.shift
         else
           yield xobject if block_given?
         end
@@ -252,6 +254,24 @@ class PDF::Reader
           (ctm.a * pt.x) + (ctm.c * pt.y) + (ctm.e),
           (ctm.b * pt.x) + (ctm.d * pt.y) + (ctm.f)
         )
+      end
+
+      # Return the current transformation matrix without exposing the graphics
+      # state hash used internally.
+      #
+      #: () -> PDF::Reader::TransformationMatrix
+      def current_transformation_matrix
+        ctm
+      end
+
+      # Color spaces visible at this point in a content stream. Resources in
+      # nested forms override resources inherited from the page.
+      #
+      #: () -> Hash[Symbol, untyped]
+      def current_color_spaces
+        @cs_stack.each_with_object({}) do |color_spaces, result|
+          color_spaces.each { |key, value| result[key] = value unless result.key?(key) }
+        end
       end
 
       # transform x and y co-ordinates from the current text space to the

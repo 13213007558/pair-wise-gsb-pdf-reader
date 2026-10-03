@@ -479,3 +479,6 @@ data/zeroed_xref_entry.pdf:
 data/zlib_stream_issue.pdf:
   :bytes: 68247
   :md5: 744d2db962d2aeec04e00891b71b3d5c
+data/shared_image_in_forms.pdf:
+  :bytes: 1078
+  :md5: a9cc64ee27a3697e13924619fa1904cf

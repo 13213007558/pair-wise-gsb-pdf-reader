@@ -125,6 +125,24 @@ module PDF
         end
       end
 
+      # Return image XObjects reachable from this page or one of its Form
+      # XObjects. The returned objects contain decoded pixels, but no drawing
+      # position; use #image_positions for that separate information.
+      #
+      #: () -> Array[PDF::Reader::ImageXObject]
+      def images
+        collect_images(resources, Set.new, Set.new, {})
+      end
+      alias image_xobjects images
+
+      #: () -> Array[PDF::Reader::ImagePlacement]
+      def image_positions
+        receiver = ImagePlacementReceiver.new
+        walk(receiver)
+        receiver.placements
+      end
+      alias image_drawings image_positions
+
       # returns the plain text content of this page encoded as UTF-8. Any
       # characters that can't be translated will be returned as a ▯
       #
@@ -269,6 +287,35 @@ module PDF
       #: () -> PDF::Reader::Resources
       def resources
         @resources ||= Resources.new(@objects, @objects.deref_hash(attributes[:Resources]) || {})
+      end
+
+      #: (PDF::Reader::Resources, Set[Integer], Set[Integer], Hash[Symbol, untyped])
+      #   -> Array[PDF::Reader::ImageXObject]
+      def collect_images(available_resources, seen_forms, seen_images, inherited_spaces)
+        color_spaces = inherited_spaces.merge(available_resources.color_spaces)
+        available_resources.xobjects.values.flat_map { |xobject|
+          case xobject.hash[:Subtype]
+          when :Image
+            if seen_images.add?(xobject.object_id)
+              [ImageXObject.new(
+                xobject, :color_spaces => color_spaces, :objects => objects
+              )]
+            else
+              []
+            end
+          when :Form
+            form_resources = Resources.new(
+              objects,
+              objects.deref_hash(xobject.hash[:Resources]) || {}
+            )
+            form_id = xobject.object_id
+            seen_forms.add?(form_id) ? collect_images(
+              form_resources, seen_forms, seen_images, color_spaces
+            ) : []
+          else
+            []
+          end
+        }
       end
 
       #: (Array[untyped], String) -> void

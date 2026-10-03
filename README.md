@@ -97,6 +97,53 @@ reader  = PDF::Reader.new("somefile.pdf")
 puts reader.objects.inspect
 ```
 
+# Decoding Images
+
+Image XObject streams contain encoded samples, not ready-to-use RGB pixels.
+`PDF::Reader::ImageXObject` decodes the raster formats the library can already
+de-filter into unpacked, top-to-bottom RGBA bytes:
+
+```ruby
+page.images.each do |xobject|
+  image = xobject.decode
+  puts image.width, image.height, image.bits_per_component
+  puts image.color_space, image.components, image.decode
+  File.binwrite("image.rgba", image.rgba)
+  p image.pixel(0, 0) # [red, green, blue, alpha]
+end
+```
+
+Supported source samples are `DeviceGray`, `DeviceRGB`, `DeviceCMYK` and
+`Indexed` variants of those spaces. Device spaces accept 1, 2, 4, 8 or 16 bits
+per component; Indexed images accept 1, 2, 4 or 8 bit indexes.
+Rows below a byte boundary are padded as specified by PDF. Explicit `/Decode`
+arrays are applied before colour conversion. Color-key `/Mask`, explicit
+image masks and `/SMask` soft masks are combined into the alpha channel; soft
+masks with different dimensions use nearest-neighbour sampling. Stencil
+images, JPEG/JBIG2/JPX/CCITT data, ICCBased or other unsupported colour
+spaces, in-image SMask data, Matte data and unsupported filter combinations
+raise `UnsupportedFeatureError` or `MalformedPDFError` rather than being
+treated as raw RGB.
+
+When no ICC profile is supplied, CMYK uses the linear PDF Device colour
+conversion: `R = 1 - C - K`, `G = 1 - M - K`, `B = 1 - Y - K`, clamped to
+`0..1`. A PDF that stores inverted ink values must state that with an
+explicit inverted `/Decode` array; the decoder does not guess.
+
+Pixel data is independent from page placement. Reachable image XObjects are
+available from `page.images`, while every painting operation is reported by
+`page.image_positions`. The latter includes the local resource label, final
+CTM and the four unit-square corners in unrotated page user space:
+
+```ruby
+page.image_positions.each do |placement|
+  p placement.label
+  p placement.matrix
+  p placement.bottom_left, placement.top_right
+  p placement.image.decode.pixel(0, 0)
+end
+```
+
 # Text Encoding
 
 Regardless of the internal encoding used in the PDF all text will be converted
