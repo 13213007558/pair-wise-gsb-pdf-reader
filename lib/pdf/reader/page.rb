@@ -35,6 +35,7 @@ module PDF
       def_delegators :resources, :color_spaces
       def_delegators :resources, :fonts
       def_delegators :resources, :graphic_states
+      def_delegators :resources, :images
       def_delegators :resources, :patterns
       def_delegators :resources, :procedure_sets
       def_delegators :resources, :properties

@@ -97,6 +97,36 @@ reader  = PDF::Reader.new("somefile.pdf")
 puts reader.objects.inspect
 ```
 
+# Images
+
+Image XObjects embedded on a page (or a form XObject) can be decoded into raw
+RGBA pixels without an external PDF renderer:
+
+```ruby
+reader = PDF::Reader.new("somefile.pdf")
+reader.page(1).images.each do |name, image|
+  puts "#{name}: #{image.width}x#{image.height} " \
+       "#{image.color_space} @ #{image.bits_per_component} bits"
+  pixels = image.rgba # binary String, width * height * 4 bytes (RGBA)
+end
+```
+
+`page.images` (and `form.images`) returns the image resources keyed by the
+name used in the content stream. `#rgba` returns the pixels of the image
+itself only - where or at what size the image is drawn is separate
+information found in the page content stream (the `Do` operator and the
+current transformation matrix).
+
+DeviceGray, DeviceRGB, DeviceCMYK and Indexed images with 1, 2, 4, 8 or 16
+bits per component are supported, along with `Decode` arrays, colour key
+`Mask` arrays, explicit stencil masks and `SMask` soft masks (masks with
+different dimensions are resampled with nearest neighbour interpolation).
+CMYK is converted to RGB with the simple, profile independent
+`R = 1 - min(1, C + K)` style conversion from the PDF specification; PDFs
+without an ICC profile are device dependent and will not match a calibrated
+RIP. JPEG/JBIG2/JPX/CCITT encoded images and ICC/Cal/Separation colour
+spaces raise `PDF::Reader::UnsupportedFeatureError`.
+
 # Text Encoding
 
 Regardless of the internal encoding used in the PDF all text will be converted

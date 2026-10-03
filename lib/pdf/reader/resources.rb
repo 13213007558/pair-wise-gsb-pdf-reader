@@ -105,6 +105,28 @@ module PDF
         TypeCheck.cast_to_pdf_dict_with_stream_values!(dict)
       end
 
+      # Returns a Hash of decoded image XObjects that are available to this
+      # page or form. Form XObjects are excluded - they are available via
+      # #xobjects, but they contain content streams rather than pixels.
+      #
+      # The keys are the labels used within the content stream (e.g. :Im1),
+      # the values are PDF::Reader::ImageXObject instances that can produce
+      # raw RGBA samples. This method decodes no pixels itself; call
+      # ImageXObject#rgba to decode a particular image.
+      #
+      #: () -> Hash[Symbol, PDF::Reader::ImageXObject]
+      def images
+        xobjects.each_with_object({}) { |(label, xobject), collected|
+          next unless xobject.hash[:Subtype] == :Image
+
+          collected[label] = ImageXObject.new(
+            xobject,
+            objects: @objects,
+            color_spaces: color_spaces
+          )
+        }
+      end
+
     end
   end
 end
