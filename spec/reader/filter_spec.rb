@@ -18,7 +18,7 @@ describe PDF::Reader::Filter do
 
     context "when passed :CCITTFaxDecode" do
       it "returns the appropriate class" do
-        expect(PDF::Reader::Filter.with(:CCITTFaxDecode)).to be_a(PDF::Reader::Filter::Null)
+        expect(PDF::Reader::Filter.with(:CCITTFaxDecode)).to be_a(PDF::Reader::Filter::CcittFax)
       end
     end
 
